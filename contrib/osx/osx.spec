@@ -67,6 +67,7 @@ hiddenimports += collect_submodules('keepkeylib')
 hiddenimports += collect_submodules('websocket')
 hiddenimports += collect_submodules('ckcc')
 hiddenimports += collect_submodules('bitbox02')
+hiddenimports += collect_submodules('smartcard')   # Satochip
 hiddenimports += ['_scrypt', 'PyQt5.QtPrintSupport']  # needed by Revealer
 
 datas = [
@@ -83,9 +84,10 @@ datas += collect_data_files('btchip')
 datas += collect_data_files('keepkeylib')
 datas += collect_data_files('ckcc')
 datas += collect_data_files('bitbox02')
+datas += collect_data_files('pysatochip')
 
 # Add the QR Scanner helper app
-datas += [(electrum + "contrib/osx/CalinsQRReader/build/Release/CalinsQRReader.app", "./contrib/osx/CalinsQRReader/build/Release/CalinsQRReader.app")]
+# datas += [(electrum + "contrib/osx/CalinsQRReader/build/Release/CalinsQRReader.app", "./contrib/osx/CalinsQRReader/build/Release/CalinsQRReader.app")]
 
 # Add libusb so Trezor and Safe-T mini will work
 binaries = [(electrum + "contrib/osx/libusb-1.0.dylib", ".")]
@@ -113,6 +115,7 @@ a = Analysis([electrum+ MAIN_SCRIPT,
               electrum+'electrum_ltc/plugins/keepkey/qt.py',
               electrum+'electrum_ltc/plugins/ledger/qt.py',
               electrum+'electrum_ltc/plugins/coldcard/qt.py',
+              electrum+'electrum_ltc/plugins/satochip/qt.py', 
               ],
              binaries=binaries,
              datas=datas,
