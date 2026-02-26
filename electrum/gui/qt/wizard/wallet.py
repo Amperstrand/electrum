@@ -1088,14 +1088,18 @@ class CosignWidget(QWidget):
 class WCChooseHWDevice(WalletWizardComponent, Logger):
     scanFailed = pyqtSignal([str, str], arguments=['code', 'message'])
     scanComplete = pyqtSignal()
+    _cardEvent = pyqtSignal()
 
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(self, parent, wizard, title=_('Choose Hardware Device'))
         Logger.__init__(self)
         self.scanFailed.connect(self.on_scan_failed)
         self.scanComplete.connect(self.on_scan_complete)
+        self._cardEvent.connect(self._on_card_event_qt)
         self.plugins = wizard.plugins
         self.config = wizard.config
+        self._rescan_timer = None
+        self._card_cb_registered = False
 
         self.error_l = WWLabel()
         self.error_l.setVisible(False)
@@ -1124,6 +1128,7 @@ class WCChooseHWDevice(WalletWizardComponent, Logger):
         self.layout().addStretch(1)
 
     def on_ready(self):
+        self._register_card_monitor()
         self.scan_devices()
 
     def on_rescan(self):
@@ -1133,6 +1138,85 @@ class WCChooseHWDevice(WalletWizardComponent, Logger):
         d = PluginsDialog(self.config, self.plugins)
         d.exec()
         self.scan_devices()
+
+    # -- Satochip helpers -----------------------------------------------
+
+    def _get_cached_satochip_status(self, info: 'DeviceInfo') -> Optional[dict]:
+        """Try to read the cached card_get_status() dict from the SatochipClient.
+
+        The status fields are cached on the CardConnector by the most recent
+        ``card_get_status()`` call (triggered during ``is_initialized()`` /
+        ``label()``), so this does NOT send another APDU to the card.
+        """
+        try:
+            devmgr = self.plugins.device_manager
+            client = devmgr.client_by_id(info.device.id_, scan_now=False)
+            if client is None:
+                return None
+            cc = getattr(client, 'cc', None)
+            if cc is None:
+                return None
+            d = {}
+            # Mirror the field names used by pysatochip.card_get_status()
+            # so that build_satochip_tooltip() can display them verbatim.
+            for attr in ('setup_done', 'is_seeded', 'nfc_policy',
+                         'protocol_version', 'needs_secure_channel',
+                         'PIN0_remaining_tries'):
+                val = getattr(cc, attr, None)
+                if val is not None:
+                    d[attr] = val
+            # pysatochip exposes 2FA as `needs_2FA` on the connector; expose it
+            # under the camelCase key expected by our tooltip and labels.
+            if hasattr(cc, 'needs_2FA'):
+                d['needs2FA'] = cc.needs_2FA
+            pv = getattr(cc, 'protocol_version', None)
+            if pv is not None:
+                d['protocol_version'] = pv
+            return d if d else None
+        except Exception:
+            return None
+
+    # -- Card insert/remove auto-rescan --------------------------------
+
+    def _register_card_monitor(self):
+        """If the satochip plugin is loaded, register for card events."""
+        try:
+            plugin = self.plugins.get_plugin('satochip')
+            if plugin and hasattr(plugin, 'register_card_event_callback'):
+                plugin.register_card_event_callback(self._on_card_event_bg)
+                self._card_cb_registered = True
+        except Exception:
+            pass
+
+    def _unregister_card_monitor(self):
+        if not self._card_cb_registered:
+            return
+        try:
+            plugin = self.plugins.get_plugin('satochip')
+            if plugin and hasattr(plugin, 'unregister_card_event_callback'):
+                plugin.unregister_card_event_callback(self._on_card_event_bg)
+        except Exception:
+            pass
+        self._card_cb_registered = False
+
+    def _on_card_event_bg(self):
+        """Called from the pyscard CardMonitor thread — marshal to Qt."""
+        self._cardEvent.emit()
+
+    def _on_card_event_qt(self):
+        """Debounced rescan triggered by card insertion/removal."""
+        if self._rescan_timer is not None:
+            self._rescan_timer.stop()
+        self._rescan_timer = QTimer(self)
+        self._rescan_timer.setSingleShot(True)
+        self._rescan_timer.timeout.connect(self.scan_devices)
+        self._rescan_timer.start(1200)
+
+    def hideEvent(self, event):
+        self._unregister_card_monitor()
+        super().hideEvent(event)
+
+    # ------------------------------------------------------------------
 
     def on_scan_failed(self, code, message):
         self.error_l.setText(message)
@@ -1153,8 +1237,24 @@ class WCChooseHWDevice(WalletWizardComponent, Logger):
                 transport_str = info.device.transport_ui_string[:20]
             except Exception:
                 transport_str = 'unknown transport'
-            descr = f"{label} [{info.model_name or name}, {state}, {transport_str}]"
-            choices.append(ChoiceItem(key=(name, info), label=descr))
+            extra = None
+            if name == 'satochip':
+                # For the "no card inserted" pseudo-device, keep the label compact
+                # and avoid showing a misleading "status: wiped".
+                if "(no card inserted)" in label:
+                    descr = label
+                else:
+                    descr = f"{label}\n    status: {state} | transport: {transport_str}"
+                try:
+                    from electrum.plugins.satochip.satochip import build_satochip_tooltip
+                    status = self._get_cached_satochip_status(info)
+                    tooltip = build_satochip_tooltip(status, info.initialized)
+                    extra = {'tooltip': tooltip}
+                except Exception:
+                    pass
+            else:
+                descr = f"{label} [{info.model_name or name}, {state}, {transport_str}]"
+            choices.append(ChoiceItem(key=(name, info), label=descr, extra_data=extra))
         msg = _('Select a device') + ':'
 
         if self.choice_w:

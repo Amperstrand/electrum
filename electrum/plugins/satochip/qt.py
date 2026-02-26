@@ -1,20 +1,26 @@
 from functools import partial
 from os import urandom
+import secrets
 import textwrap
 import threading
 
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QPushButton, QLabel, QVBoxLayout, QHBoxLayout,
-                             QWidget, QGridLayout, QComboBox, QLineEdit, QTabWidget)
-
+                             QWidget, QGridLayout, QComboBox, QTabWidget,
+                             QGroupBox, QSpinBox, QRadioButton, QSlider,
+                             QMessageBox)
 from electrum.i18n import _
 from electrum.logging import get_logger
-from electrum.util import UserFacingException
+from electrum.util import UserFacingException, ChoiceItem
 from electrum.simple_config import SimpleConfig
 from electrum.gui.qt.util import (EnterButton, Buttons, CloseButton, icon_path,
-                                  OkButton, CancelButton, WindowModalDialog, WWLabel, PasswordLineEdit)
-from electrum.gui.qt.qrcodewidget import QRDialog
+                                  OkButton, CancelButton, WindowModalDialog, WWLabel,
+                                  PasswordLineEdit, ChoiceWidget, ColorScheme,
+                                  line_dialog)
+from electrum.mnemonic import Wordlist
+from electrum.gui.qt.seed_dialog import SeedWidget
+from electrum.gui.qt.qrcodewidget import QRCodeWidget
 from electrum.gui.qt.wizard.wallet import (WCHaveSeed, WCEnterExt, WCScriptAndDerivation,
                                            WCHWUnlock, WCHWXPub, WalletWizardComponent, QENewWalletWizard)
 from electrum.plugin import hook
@@ -30,6 +36,68 @@ from pysatochip.version import SATOCHIP_PROTOCOL_MAJOR_VERSION, SATOCHIP_PROTOCO
 
 _logger = get_logger(__name__)
 
+
+# Error message mapping for user-friendly messages
+def get_user_friendly_error(error: Exception, context: str = '') -> str:
+    """Map technical errors to user-friendly messages."""
+    error_type = type(error).__name__
+    error_str = str(error).lower()
+    
+    # Card connection errors
+    if 'card not present' in error_str or 'CardNotPresentError' in error_type:
+        return _("No Satochip card detected. Please insert your card and try again.")
+    
+    # PIN errors
+    if 'WrongPinError' in error_type:
+        tries = getattr(error, 'pin_left', getattr(error, 'tries_left', 'unknown'))
+        if tries == 0 or 'blocked' in error_str:
+            return _("PIN is blocked! You must use the PUK to unblock the card.")
+        return _(f"Wrong PIN! {tries} tries remaining before the card is blocked.")
+    if 'wrong pin' in error_str or 'invalid pin' in error_str:
+        return _("Incorrect PIN. Please try again.")
+    
+    # Card errors
+    if 'CardError' in error_type:
+        return _("The card encountered an error. Please try again or reinsert the card.")
+    
+    # Secure channel errors
+    if 'secure channel' in error_str or 'encryption' in error_str:
+        return _("Secure channel error. The card may need to be reinitialized.")
+    
+    # 2FA errors
+    if '2fa' in error_str or 'challenge' in error_str:
+        return _("Two-factor authentication error. Please check your 2FA device.")
+    if 'rejected by 2fa' in error_str or '0x9c0b' in error_str:
+        return _("Transaction rejected by your 2FA device.")
+    
+    # Seed errors
+    if 'not seeded' in error_str or 'unseeded' in error_str:
+        return _("The card does not have a seed. Please import a seed first.")
+    if 'already seeded' in error_str:
+        return _("The card already has a seed. Reset the seed first to import a new one.")
+    
+    # APDU status word errors (common ones)
+    if '0x6982' in error_str:
+        return _("Security condition not satisfied. PIN verification may be required.")
+    if '0x6983' in error_str:
+        return _("Authentication method blocked. The PIN or PUK has been exhausted.")
+    if '0x6a80' in error_str:
+        return _("Invalid data sent to card. Please check your inputs.")
+    if '0x6d00' in error_str:
+        return _("Command not supported. The card firmware may need to be updated.")
+    if '0x6e00' in error_str:
+        return _("Card does not support this command.")
+    
+    # User-facing exceptions (already user-friendly)
+    if isinstance(error, UserFacingException):
+        return str(error)
+    
+    # Default fallback with context
+    if context:
+        return _(f"Error during {context}: {error}")
+    return _(f"An error occurred: {error}")
+
+
 MSG_USE_2FA = _(
     "Do you want to use 2-Factor-Authentication (2FA)?"
     "\n\nWith 2FA, any transaction must be confirmed on a second device such as your smartphone. "
@@ -37,6 +105,43 @@ MSG_USE_2FA = _(
     "Then you have to pair your 2FA device with your Satochip by scanning the qr-code on the next screen. "
     "\n\nWARNING: be sure to backup a copy of the qr-code in a safe place, in case you have to reinstall the app!"
 )
+
+def _generate_bip39_mnemonic(num_words: int) -> str:
+    """Generate a BIP39 mnemonic using only Electrum's bundled wordlist.
+
+    Implements the BIP39 algorithm directly:
+      entropy  → sha256 checksum → concatenate → split into 11-bit indices → words.
+
+    Uses only Python stdlib (os.urandom, hashlib) and the english.txt wordlist
+    that Electrum already ships.  No external 'mnemonic' (python-mnemonic) package
+    is required.
+
+    num_words must be 12 (128-bit entropy) or 24 (256-bit entropy).
+    """
+    import hashlib as _hashlib
+
+    assert num_words in (12, 24), f"num_words must be 12 or 24, got {num_words}"
+
+    entropy_bits = 128 if num_words == 12 else 256
+    entropy_bytes = secrets.token_bytes(entropy_bits // 8)
+
+    # BIP39: checksum = first (entropy_bits / 32) bits of sha256(entropy)
+    checksum_bits = entropy_bits // 32
+    digest = _hashlib.sha256(entropy_bytes).digest()
+    checksum = digest[0] >> (8 - checksum_bits)
+
+    # Pack entropy + checksum into one big integer
+    entropy_int = int.from_bytes(entropy_bytes, 'big')
+    combined = (entropy_int << checksum_bits) | checksum
+
+    # Split into 11-bit groups and look up words
+    wordlist = Wordlist.from_file('english.txt')
+    words = [
+        wordlist[(combined >> (11 * i)) & 0x7FF]
+        for i in range(num_words - 1, -1, -1)
+    ]
+    return ' '.join(words)
+
 
 MSG_SEED_IMPORT = [
     _("Your Satochip is currently unseeded. "),
@@ -101,8 +206,13 @@ class Plugin(SatochipPlugin, QtPluginBase):
             'satochip_not_setup': {'gui': WCSatochipSetupParams},
             'satochip_do_setup': {'gui': WCSatochipSetup},
             'satochip_not_seeded': {
-                'gui': WCSeedMessage,
-                'next': 'satochip_have_seed'
+                'gui': WCSeedMethodChoice,
+                'next': lambda d: 'satochip_have_seed' if d.get('satochip_seed_method') == 'import'
+                                  else 'satochip_generate_seed',
+            },
+            'satochip_generate_seed': {
+                'gui': WCSatochipGenerateSeed,
+                'next': lambda d: 'satochip_have_ext' if wizard.wants_ext(d) else 'satochip_import_seed',
             },
             'satochip_have_seed': {
                 'gui': WCHaveSeed,
@@ -132,21 +242,29 @@ class Satochip_Handler(QtHandlerBase):
 
 
 class SatochipSettingsDialog(WindowModalDialog):
-    """This dialog doesn't require a device be paired with a wallet.
-
-    We want users to be able to wipe a device even if they've forgotten
-    their PIN."""
+    """Tabbed settings dialog for Satochip device.
+    
+    Tab 1 - Information: Device status, versions, card info
+    Tab 2 - Settings: PIN change, label, session timeout  
+    Tab 3 - Advanced: 2FA, seed reset, card verification
+    """
 
     def __init__(self, window, plugin, keystore, device_id):
         title = _("{} Settings").format(plugin.device)
         super(SatochipSettingsDialog, self).__init__(window, title)
-        self.setMaximumWidth(540)
+        self.setMaximumWidth(600)
+        self.setMinimumHeight(400)
 
         devmgr = plugin.device_manager()
         self.config = devmgr.config
         handler = keystore.handler
         self.thread = thread = keystore.thread
         self.window = window
+        self.device_id = device_id
+        self.devmgr = devmgr
+        
+        # Store feature values for display
+        self.features = {}
 
         def connect_and_doit():
             client = devmgr.client_by_id(device_id)
@@ -154,168 +272,314 @@ class SatochipSettingsDialog(WindowModalDialog):
                 raise RuntimeError("Device not connected")
             return client
 
-        body = QWidget()
-        body_layout = QVBoxLayout(body)
-        grid = QGridLayout()
-        grid.setColumnStretch(3, 1)
+        # Create tab widget
+        tabs = QTabWidget()
+        
+        # =====================================
+        # TAB 1: Information
+        # =====================================
+        info_tab = QWidget()
+        info_layout = QVBoxLayout(info_tab)
+        info_glayout = QGridLayout()
+        info_glayout.setColumnStretch(2, 1)
 
-        # see <http://doc.qt.io/archives/qt-4.8/richtext-html-subset.html>
-        title = QLabel('''<center>
-<span style="font-size: x-large">Satochip Wallet</span>
-<br><a href="https://satochip.io">satochip.io</a>''')
-        title.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
-
-        grid.addWidget(title, 0, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
-        y = 3
-
+        # Header with logo
+        header_label = QLabel('''<center>
+<span style="font-size: x-large">Satochip</span>
+<br><a href="https://satochip.io">satochip.io</a>
+</center>''')
+        header_label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        header_label.setOpenExternalLinks(True)
+        info_glayout.addWidget(header_label, 0, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
+        
+        y = 2
         rows = [
             ('fw_version', _("Firmware Version:")),
             ('sw_version', _("Electrum Support:")),
+            ('device_id_label', _("Device ID:")),
             ('is_seeded', _("Wallet seeded:")),
-            ('needs_2FA', _("Requires 2FA:")),
-            ('needs_SC', _("Secure Channel:")),
-            ('card_label', _("Card label:")),
+            ('setup_done', _("Setup completed:")),
+            ('pin_tries', _("PIN tries remaining:")),
         ]
         for row_num, (member_name, label) in enumerate(rows):
             widget = QLabel('<tt>')
             widget.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
-
-            grid.addWidget(QLabel(label), y, 0, 1, 1, Qt.AlignmentFlag.AlignRight)
-            grid.addWidget(widget, y, 1, 1, 1, Qt.AlignmentFlag.AlignLeft)
+            info_glayout.addWidget(QLabel(label), y, 0, 1, 1, Qt.AlignmentFlag.AlignRight)
+            info_glayout.addWidget(widget, y, 1, 1, 1, Qt.AlignmentFlag.AlignLeft)
             setattr(self, member_name, widget)
             y += 1
 
-        body_layout.addLayout(grid)
+        info_layout.addLayout(info_glayout)
+        info_layout.addStretch(1)
 
-        pin_btn = QPushButton('Change PIN')
+        # =====================================
+        # TAB 2: Settings
+        # =====================================
+        settings_tab = QWidget()
+        settings_layout = QVBoxLayout(settings_tab)
+        settings_glayout = QGridLayout()
+        settings_glayout.setColumnStretch(2, 1)
 
-        def _change_pin():
-            thread.add(connect_and_doit, on_success=self.change_pin)
-        pin_btn.clicked.connect(_change_pin)
+        y = 0
+        
+        # Session Timeout Section
+        timeout_group = QGroupBox(_("Session Timeout"))
+        timeout_vbox = QVBoxLayout(timeout_group)
+        
+        timeout_msg = QLabel(
+            _("Automatically lock the device after a period of inactivity. "
+              "Once locked, you will need to enter your PIN again to use the device."))
+        timeout_msg.setWordWrap(True)
+        timeout_vbox.addWidget(timeout_msg)
+        
+        timeout_hbox = QHBoxLayout()
+        self.timeout_label = QLabel(_("5 minutes"))
+        self.timeout_label.setMinimumWidth(80)
+        timeout_slider = QSlider(Qt.Orientation.Horizontal)
+        timeout_slider.setRange(1, 60)  # 1-60 minutes
+        timeout_slider.setSingleStep(1)
+        timeout_slider.setTickInterval(5)
+        timeout_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        
+        # Load current timeout (default 5 minutes)
+        current_timeout = self.config.get('satochip_session_timeout', 300) // 60
+        timeout_slider.setValue(current_timeout)
+        self.timeout_label.setText(_("{:d} minutes").format(current_timeout))
+        
+        def timeout_changed(value):
+            self.timeout_label.setText(_("{:d} minutes").format(value))
+            
+        def timeout_released():
+            mins = timeout_slider.value()
+            self.config.set_key('satochip_session_timeout', mins * 60, save=True)
+            _logger.info(f"Session timeout set to {mins} minutes")
+            
+        timeout_slider.valueChanged.connect(timeout_changed)
+        timeout_slider.sliderReleased.connect(timeout_released)
+        
+        timeout_hbox.addWidget(timeout_slider)
+        timeout_hbox.addWidget(self.timeout_label)
+        timeout_vbox.addLayout(timeout_hbox)
+        
+        settings_layout.addWidget(timeout_group)
+        
+        # Card Label Section
+        label_group = QGroupBox(_("Card Label"))
+        label_vbox = QVBoxLayout(label_group)
+        
+        self.card_label_display = QLabel('<tt>(none)')
+        label_vbox.addWidget(self.card_label_display)
+        
+        change_label_btn = QPushButton(_("Change Label"))
+        change_label_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.change_card_label))
+        label_vbox.addWidget(change_label_btn)
+        
+        label_msg = QLabel(_("The label is stored on the card and helps identify it."))
+        label_msg.setWordWrap(True)
+        label_msg.setStyleSheet(ColorScheme.GRAY.as_stylesheet())
+        label_vbox.addWidget(label_msg)
+        
+        settings_layout.addWidget(label_group)
+        
+        # PIN Section
+        pin_group = QGroupBox(_("PIN Management"))
+        pin_vbox = QVBoxLayout(pin_group)
+        
+        pin_btn = QPushButton(_("Change PIN"))
+        pin_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.change_pin))
+        pin_vbox.addWidget(pin_btn)
+        
+        pin_msg = QLabel(_("Change the PIN used to unlock your Satochip."))
+        pin_msg.setWordWrap(True)
+        pin_msg.setStyleSheet(ColorScheme.GRAY.as_stylesheet())
+        pin_vbox.addWidget(pin_msg)
+        
+        settings_layout.addWidget(pin_group)
+        settings_layout.addStretch(1)
 
-        seed_btn = QPushButton('Reset seed')
+        # =====================================
+        # TAB 3: Advanced
+        # =====================================
+        advanced_tab = QWidget()
+        advanced_layout = QVBoxLayout(advanced_tab)
+        advanced_glayout = QGridLayout()
+        advanced_glayout.setColumnStretch(2, 1)
 
-        def _reset_seed():
-            thread.add(connect_and_doit, on_success=self.reset_seed)
-            thread.add(connect_and_doit, on_success=self.show_values)
-        seed_btn.clicked.connect(_reset_seed)
+        # Security status row
+        y = 0
+        for name, label in [('needs_2FA', _("2FA Enabled:")), ('needs_SC', _("Secure Channel:"))]:
+            widget = QLabel('<tt>')
+            advanced_glayout.addWidget(QLabel(label), y, 0, 1, 1, Qt.AlignmentFlag.AlignRight)
+            advanced_glayout.addWidget(widget, y, 1, 1, 1, Qt.AlignmentFlag.AlignLeft)
+            setattr(self, name, widget)
+            y += 1
+        
+        advanced_layout.addLayout(advanced_glayout)
+        advanced_layout.addSpacing(10)
+        
+        # 2FA Section
+        twofa_group = QGroupBox(_("Two-Factor Authentication"))
+        twofa_vbox = QVBoxLayout(twofa_group)
+        
+        self.set_2FA_btn = QPushButton(_("Enable 2FA"))
+        self.set_2FA_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.set_2FA))
+        self.set_2FA_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.show_values))
+        twofa_vbox.addWidget(self.set_2FA_btn)
+        
+        self.reset_2FA_btn = QPushButton(_("Disable 2FA"))
+        self.reset_2FA_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.reset_2FA))
+        self.reset_2FA_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.show_values))
+        twofa_vbox.addWidget(self.reset_2FA_btn)
+        
+        change_2FA_server_btn = QPushButton(_("Select 2FA Server"))
+        change_2FA_server_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.change_2FA_server))
+        twofa_vbox.addWidget(change_2FA_server_btn)
+        
+        twofa_msg = QLabel(_("With 2FA, transactions must be confirmed on a second device (e.g., smartphone)."))
+        twofa_msg.setWordWrap(True)
+        twofa_msg.setStyleSheet(ColorScheme.GRAY.as_stylesheet())
+        twofa_vbox.addWidget(twofa_msg)
+        
+        advanced_layout.addWidget(twofa_group)
+        
+        # Seed Management Section
+        seed_group = QGroupBox(_("Seed Management"))
+        seed_vbox = QVBoxLayout(seed_group)
+        
+        seed_btn = QPushButton(_("Reset Seed"))
+        seed_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.reset_seed))
+        seed_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.show_values))
+        seed_vbox.addWidget(seed_btn)
+        
+        seed_warning = QLabel(
+            _("⚠️ WARNING: Resetting the seed will erase all keys from the card. "
+              "Make sure you have a backup of your seed before proceeding!"))
+        seed_warning.setWordWrap(True)
+        seed_warning.setStyleSheet(ColorScheme.RED.as_stylesheet())
+        seed_vbox.addWidget(seed_warning)
+        
+        advanced_layout.addWidget(seed_group)
+        
+        # Card Verification Section
+        verify_group = QGroupBox(_("Card Verification"))
+        verify_vbox = QVBoxLayout(verify_group)
+        
+        verify_card_btn = QPushButton(_("Verify Card Authenticity"))
+        verify_card_btn.clicked.connect(lambda: thread.add(connect_and_doit, on_success=self.verify_card))
+        verify_vbox.addWidget(verify_card_btn)
+        
+        verify_msg = QLabel(_("Verify the card's certificate chain to ensure it is a genuine Satochip."))
+        verify_msg.setWordWrap(True)
+        verify_msg.setStyleSheet(ColorScheme.GRAY.as_stylesheet())
+        verify_vbox.addWidget(verify_msg)
+        
+        advanced_layout.addWidget(verify_group)
+        advanced_layout.addStretch(1)
 
-        set_2FA_btn = QPushButton('Enable 2FA')
-
-        def _set_2FA():
-            thread.add(connect_and_doit, on_success=self.set_2FA)
-            thread.add(connect_and_doit, on_success=self.show_values)
-        set_2FA_btn.clicked.connect(_set_2FA)
-
-        reset_2FA_btn = QPushButton('Disable 2FA')
-
-        def _reset_2FA():
-            thread.add(connect_and_doit, on_success=self.reset_2FA)
-            thread.add(connect_and_doit, on_success=self.show_values)
-        reset_2FA_btn.clicked.connect(_reset_2FA)
-
-        change_2FA_server_btn = QPushButton('Select 2FA server')
-
-        def _change_2FA_server():
-            thread.add(connect_and_doit, on_success=self.change_2FA_server)
-        change_2FA_server_btn.clicked.connect(_change_2FA_server)
-
-        verify_card_btn = QPushButton('Verify card')
-
-        def _verify_card():
-            thread.add(connect_and_doit, on_success=self.verify_card)
-        verify_card_btn.clicked.connect(_verify_card)
-
-        change_card_label_btn = QPushButton('Change label')
-
-        def _change_card_label():
-            thread.add(connect_and_doit, on_success=self.change_card_label)
-        change_card_label_btn.clicked.connect(_change_card_label)
-
-        y += 3
-        grid.addWidget(pin_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
-        y += 2
-        grid.addWidget(seed_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
-        y += 2
-        grid.addWidget(set_2FA_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
-        y += 2
-        grid.addWidget(reset_2FA_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
-        y += 2
-        grid.addWidget(change_2FA_server_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
-        y += 2
-        grid.addWidget(verify_card_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
-        y += 2
-        grid.addWidget(change_card_label_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
-        y += 2
-        grid.addWidget(CloseButton(self), y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
+        # Add tabs to widget
+        tabs.addTab(info_tab, _("Information"))
+        tabs.addTab(settings_tab, _("Settings"))
+        tabs.addTab(advanced_tab, _("Advanced"))
 
         dialog_vbox = QVBoxLayout(self)
-        dialog_vbox.addWidget(body)
+        dialog_vbox.addWidget(tabs)
+        dialog_vbox.addLayout(Buttons(CloseButton(self)))
 
         # Fetch values and show them
         thread.add(connect_and_doit, on_success=self.show_values)
 
     def show_values(self, client):
-        _logger.info("Show value!")
+        _logger.info("Show values!")
         try:
             is_ok = client.verify_PIN()
             if not is_ok:
-                msg = f"action cancelled by user"
-                self.window.show_error(msg)
+                self.window.show_error(_("Action cancelled by user"))
                 return
         except UserFacingException as e:
             self.window.show_error(str(e))
             return
+        except Exception as e:
+            self.window.show_error(get_user_friendly_error(e, "PIN verification"))
+            return
 
-        sw_rel = 'v' + str(SATOCHIP_PROTOCOL_MAJOR_VERSION) + \
-            '.' + str(SATOCHIP_PROTOCOL_MINOR_VERSION)
+        # Software version
+        sw_rel = 'v' + str(SATOCHIP_PROTOCOL_MAJOR_VERSION) + '.' + str(SATOCHIP_PROTOCOL_MINOR_VERSION)
         self.sw_version.setText('<tt>%s' % sw_rel)
 
-        (response, sw1, sw2, d) = client.cc.card_get_status()
+        # Card status
+        try:
+            (response, sw1, sw2, d) = client.cc.card_get_status()
+        except Exception as e:
+            self.window.show_error(get_user_friendly_error(e, "getting card status"))
+            return
+            
         if sw1 == 0x90 and sw2 == 0x00:
-            # fw_rel= 'v' + str(d["protocol_major_version"]) + '.' + str(d["protocol_minor_version"])
-            fw_rel = 'v' + str(d["protocol_major_version"]) + '.' + str(d["protocol_minor_version"]) + \
-                '-' + str(d["applet_major_version"]) + '.' + \
-                str(d["applet_minor_version"])
+            # Firmware version
+            fw_rel = 'v{}.{}-{}.{}'.format(
+                d["protocol_major_version"], d["protocol_minor_version"],
+                d["applet_major_version"], d["applet_minor_version"])
             self.fw_version.setText('<tt>%s' % fw_rel)
+            
+            # Device ID (from authentikey fingerprint)
+            try:
+                authentikey = client.cc.card_export_authentikey()
+                if authentikey:
+                    from electrum.crypto import hash_160
+                    pubkey = authentikey.get_public_key_bytes(compressed=True)
+                    device_id = hash_160(pubkey)[:4].hex()
+                    self.device_id_label.setText('<tt>%s' % device_id.upper())
+            except:
+                self.device_id_label.setText('<tt>(unavailable)')
 
-            # is_seeded?
+            # Setup status
+            self.setup_done.setText('<tt>%s' % ("yes" if d.get("setup_done") else "no"))
+            
+            # PIN tries
+            pin_tries = d.get("PIN0_remaining_tries", "?")
+            self.pin_tries.setText('<tt>%s' % pin_tries)
+
+            # Is seeded?
             if len(response) >= 10:
-                self.is_seeded.setText(
-                    '<tt>%s' % "yes") if d["is_seeded"] else self.is_seeded.setText('<tt>%s' % "no")
+                is_seeded = d["is_seeded"]
             else:  # for earlier versions
                 try:
                     client.cc.card_bip32_get_authentikey()
-                    self.is_seeded.setText('<tt>%s' % "yes")
+                    is_seeded = True
                 except Exception:
-                    self.is_seeded.setText('<tt>%s' % "no")
+                    is_seeded = False
+            self.is_seeded.setText('<tt>%s' % ("yes" if is_seeded else "no"))
 
-            # needs2FA?
-            if d["needs2FA"]:
-                self.needs_2FA.setText('<tt>%s' % "yes")
-            else:
-                self.needs_2FA.setText('<tt>%s' % "no")
+            # 2FA status
+            needs_2FA = d.get("needs2FA", False)
+            self.needs_2FA.setText('<tt>%s' % ("yes" if needs_2FA else "no"))
+            
+            # Update button states based on 2FA
+            self.set_2FA_btn.setVisible(not needs_2FA)
+            self.reset_2FA_btn.setVisible(needs_2FA)
 
-            # needs secure channel
-            if d["needs_secure_channel"]:
-                self.needs_SC.setText('<tt>%s' % "yes")
-            else:
-                self.needs_SC.setText('<tt>%s' % "no")
+            # Secure channel
+            needs_SC = d.get("needs_secure_channel", False)
+            self.needs_SC.setText('<tt>%s' % ("yes" if needs_SC else "no"))
 
-            # card label
-            (response, sw1, sw2, label) = client.cc.card_get_label()
-            if label == "":
-                label = "(none)"
-            self.card_label.setText('<tt>%s' % label)
+            # Card label
+            try:
+                (_dummy, _dummy, _dummy, label) = client.cc.card_get_label()
+                if label == "":
+                    label = "(none)"
+                self.card_label_display.setText('<tt>%s' % label)
+            except:
+                self.card_label_display.setText('<tt>(error)')
 
         else:
-            fw_rel = "(unitialized)"
-            self.fw_version.setText('<tt>%s' % fw_rel)
-            self.needs_2FA.setText('<tt>%s' % "(unitialized)")
-            self.is_seeded.setText('<tt>%s' % "no")
-            self.needs_SC.setText('<tt>%s' % "(unknown)")
-            self.card_label.setText('<tt>%s' % "(none)")
+            # Uninitialized card
+            self.fw_version.setText('<tt>(uninitialized)')
+            self.device_id_label.setText('<tt>(none)')
+            self.setup_done.setText('<tt>no')
+            self.needs_2FA.setText('<tt>(uninitialized)')
+            self.is_seeded.setText('<tt>no')
+            self.needs_SC.setText('<tt>(unknown)')
+            self.card_label_display.setText('<tt>(none)')
 
     def change_pin(self, client):
         _logger.info("In change_pin")
@@ -324,102 +588,85 @@ class SatochipSettingsDialog(WindowModalDialog):
         msg_confirm = _("Please confirm the new PIN for your Satochip:")
         msg_error = _("The PIN values do not match! Please type PIN again!")
         msg_cancel = _("PIN Change cancelled!")
-        (is_pin, oldpin, newpin) = client.PIN_change_dialog(
-            msg_oldpin, msg_newpin, msg_confirm, msg_error, msg_cancel)
-        if not is_pin:
-            return
-
-        oldpin = list(oldpin)
-        newpin = list(newpin)
+        
         try:
+            (is_pin, oldpin, newpin) = client.PIN_change_dialog(
+                msg_oldpin, msg_newpin, msg_confirm, msg_error, msg_cancel)
+            if not is_pin:
+                return
+
+            oldpin = list(oldpin)
+            newpin = list(newpin)
             (response, sw1, sw2) = client.cc.card_change_PIN(0, oldpin, newpin)
             if sw1 == 0x90 and sw2 == 0x00:
-                msg = _("PIN changed successfully!")
-                self.window.show_message(msg)
+                self.window.show_message(_("PIN changed successfully!"))
             else:
-                msg = _("Failed to change PIN!")
-                self.window.show_error(msg)
+                self.window.show_error(_("Failed to change PIN! Error: {}{}").format(hex(sw1), hex(sw2)))
         except WrongPinError as ex:
-            msg = (
-                f"Failed to change PIN. Wrong PIN! {ex.pin_left} tries remaining!")
-            self.window.show_error(msg)
+            tries = getattr(ex, 'pin_left', 'unknown')
+            self.window.show_error(_("Wrong PIN! {} tries remaining.").format(tries))
         except Exception as ex:
-            self.window.show_error(str(ex))
+            self.window.show_error(get_user_friendly_error(ex, "PIN change"))
 
     def reset_seed(self, client):
         _logger.info("In reset_seed")
 
-        # pin
         msg = ''.join([
-            _("WARNING!\n"),
-            _("You are about to reset the seed of your Satochip. This process is irreversible!\n"),
+            _("⚠️ WARNING!\n\n"),
+            _("You are about to reset the seed of your Satochip.\n"),
+            _("This process is irreversible!\n\n"),
             _("Please be sure that your wallet is empty and that you have a backup of the seed as a precaution.\n\n"),
             _("To proceed, enter the PIN for your Satochip:")
         ])
         password = self.reset_seed_dialog(msg)
         if password is None:
             return
-        pin = password.encode('utf8')
-        pin = list(pin)
+        pin = list(password.encode('utf8'))
 
         # if 2FA is enabled, get challenge-response
         hmac = []
         if client.cc.needs_2FA is None:
-            (response, sw1, sw2, d) = client.cc.card_get_status()
+            (_dummy, _dummy, _dummy, d) = client.cc.card_get_status()
         if client.cc.needs_2FA:
-            # challenge based on authentikey
             authentikeyx = bytearray(client.cc.parser.authentikey_coordx).hex()
-
-            # format & encrypt msg
             import json
             msg = {'action': "reset_seed", 'authentikeyx': authentikeyx}
             msg = json.dumps(msg)
             (id_2FA, msg_out) = client.cc.card_crypt_transaction_2FA(msg, True)
-            d = {}
-            d['msg_encrypt'] = msg_out
-            d['id_2FA'] = id_2FA
+            d = {'msg_encrypt': msg_out, 'id_2FA': id_2FA}
 
-            # do challenge-response with 2FA device...
             self.window.show_message(
-                '2FA request sent! Approve or reject request on your second device.')
-            server_2FA = self.config.get(
-                "satochip_2FA_server", default=SERVER_LIST[0])
+                _('2FA request sent! Approve or reject request on your second device.'))
+            server_2FA = self.config.get("satochip_2FA_server", default=SERVER_LIST[0])
             Satochip2FA.do_challenge_response(d, server_name=server_2FA)
-            # decrypt and parse reply to extract challenge response
+            
             try:
                 reply_encrypt = d['reply_encrypt']
             except Exception:
-                self.give_error("No response received from 2FA", True)
-            reply_decrypt = client.cc.card_crypt_transaction_2FA(
-                reply_encrypt, False)
+                self.window.show_error(_("No response received from 2FA device!"))
+                return
+            reply_decrypt = client.cc.card_crypt_transaction_2FA(reply_encrypt, False)
             _logger.info("challenge:response= " + reply_decrypt)
-            reply_decrypt = reply_decrypt.split(":")
-            chalresponse = reply_decrypt[1]
+            chalresponse = reply_decrypt.split(":")[1]
             hmac = list(bytes.fromhex(chalresponse))
 
-        # send request
-        (response, sw1, sw2) = client.cc.card_reset_seed(pin, hmac)
-        if sw1 == 0x90 and sw2 == 0x00:
-            msg = _(
-                "Seed reset successfully!\nYou should close this wallet and launch the wizard to generate a new wallet.")
-            self.window.show_message(msg)
-            # to do: close client?
-        elif sw1 == 0x9c and sw2 == 0x0b:
-            msg = _(
-                f"Failed to reset seed: request rejected by 2FA device (error code: {hex(256*sw1+sw2)})")
-            self.window.show_message(msg)
-            # to do: close client?
-        else:
-            msg = _(
-                f"Failed to reset seed with error code: {hex(256*sw1+sw2)}")
-            self.window.show_error(msg)
+        try:
+            (response, sw1, sw2) = client.cc.card_reset_seed(pin, hmac)
+            if sw1 == 0x90 and sw2 == 0x00:
+                self.window.show_message(_(
+                    "Seed reset successfully!\n"
+                    "You should close this wallet and launch the wizard to generate a new wallet."))
+            elif sw1 == 0x9c and sw2 == 0x0b:
+                self.window.show_error(_("Failed: request rejected by 2FA device."))
+            else:
+                self.window.show_error(_("Failed to reset seed. Error: {}{}").format(hex(sw1), hex(sw2)))
+        except Exception as ex:
+            self.window.show_error(get_user_friendly_error(ex, "seed reset"))
 
     def reset_seed_dialog(self, msg):
-        _logger.info("In reset_seed_dialog")
         parent = self.top_level_window()
         d = WindowModalDialog(parent, _("Enter PIN"))
-        pw = QLineEdit()
-        pw.setEchoMode(QLineEdit.EchoMode.Password)
+        pw = PasswordLineEdit()
         pw.setMinimumWidth(200)
 
         vbox = QVBoxLayout()
@@ -428,245 +675,193 @@ class SatochipSettingsDialog(WindowModalDialog):
         vbox.addLayout(Buttons(CancelButton(d), OkButton(d)))
         d.setLayout(vbox)
 
-        passphrase = pw.text() if d.exec() else None
-        return passphrase
+        return pw.text() if d.exec() else None
 
     def set_2FA(self, client):
         if not client.cc.needs_2FA:
             use_2FA = client.handler.yes_no_question(MSG_USE_2FA)
             if use_2FA:
-                # verify PIN
                 is_ok = client.verify_PIN()
                 if not is_ok:
-                    msg = f"action cancelled by user"
-                    self.window.show_error(msg)
+                    self.window.show_error(_("Action cancelled by user"))
                     return
 
                 secret_2FA = urandom(20)
                 secret_2FA_hex = secret_2FA.hex()
-                # the secret must be shared with the second factor app (eg on a smartphone)
                 try:
-                    help_txt = "Scan the QR-code with your Satochip-2FA app and make a backup of the following secret: " + secret_2FA_hex
-                    d = QRDialog(data=secret_2FA_hex, parent=None, title="Secret_2FA", show_text=False,
-                                 help_text=help_txt, show_copy_text_btn=True, show_cancel_btn=True, config=self.config)
-                    result = d.exec()  # result should be 0 or 1
-                    if result == 1:
-                        # further communications will require an id and an encryption key (for privacy).
-                        # Both are derived from the secret_2FA using a one-way function inside the Satochip
-                        amount_limit = 0  # i.e. always use
-                        (response, sw1, sw2) = client.cc.card_set_2FA_key(
-                            secret_2FA, amount_limit)
+                    help_txt = _("Scan the QR-code with your Satochip-2FA app and make a backup of this secret: {}"
+                                ).format(secret_2FA_hex)
+                    d = WindowModalDialog(self.window, title=_("Setup 2FA"))
+                    vbox = QVBoxLayout()
+                    vbox.addWidget(WWLabel(help_txt))
+                    vbox.addWidget(QRCodeWidget(secret_2FA_hex))
+                    vbox.addLayout(Buttons(CancelButton(d), OkButton(d)))
+                    d.setLayout(vbox)
+                    if d.exec():
+                        amount_limit = 0  # always use
+                        (response, sw1, sw2) = client.cc.card_set_2FA_key(secret_2FA, amount_limit)
                         if sw1 != 0x90 or sw2 != 0x00:
-                            _logger.info(
-                                f"Unable to set 2FA with error code:= {hex(256*sw1+sw2)}")
-                            self.window.show_error(
-                                f'Unable to setup 2FA with error code: {hex(256*sw1+sw2)}')
+                            self.window.show_error(_("Unable to setup 2FA. Error: {}{}"
+                                                    ).format(hex(sw1), hex(sw2)))
                         else:
-                            self.window.show_message(
-                                "2FA enabled successfully!")
+                            self.window.show_message(_("2FA enabled successfully!"))
                     else:
-                        self.window.show_message("2FA cancelled by user!")
-                        return
+                        self.window.show_message(_("2FA setup cancelled by user."))
                 except Exception as e:
-                    _logger.info(f"SatochipPlugin: setup 2FA error: {e}")
-                    self.window.show_error(
-                        f'Unable to setup 2FA with error code: {e}')
-                    return
+                    self.window.show_error(get_user_friendly_error(e, "2FA setup"))
 
     def reset_2FA(self, client):
         if client.cc.needs_2FA:
-            # verify pin
             is_ok = client.verify_PIN()
             if not is_ok:
-                msg = f"action cancelled by user"
-                self.window.show_error(msg)
+                self.window.show_error(_("Action cancelled by user"))
                 return
 
-            # challenge based on ID_2FA
-            # format & encrypt msg
             import json
             msg = {'action': "reset_2FA"}
             msg = json.dumps(msg)
             (id_2FA, msg_out) = client.cc.card_crypt_transaction_2FA(msg, True)
-            d = {}
-            d['msg_encrypt'] = msg_out
-            d['id_2FA'] = id_2FA
+            d = {'msg_encrypt': msg_out, 'id_2FA': id_2FA}
 
-            # do challenge-response with 2FA device...
             self.window.show_message(
-                '2FA request sent! Approve or reject request on your second device.')
-            server_2FA = self.config.get(
-                "satochip_2FA_server", default=SERVER_LIST[0])
+                _('2FA request sent! Approve or reject request on your second device.'))
+            server_2FA = self.config.get("satochip_2FA_server", default=SERVER_LIST[0])
             Satochip2FA.do_challenge_response(d, server_name=server_2FA)
-            # decrypt and parse reply to extract challenge response
+            
             try:
                 reply_encrypt = d['reply_encrypt']
             except Exception:
-                self.give_error("No response received from 2FA!", True)
-            reply_decrypt = client.cc.card_crypt_transaction_2FA(
-                reply_encrypt, False)
-            _logger.info("challenge:response= " + reply_decrypt)
-            reply_decrypt = reply_decrypt.split(":")
-            chalresponse = reply_decrypt[1]
+                self.window.show_error(_("No response received from 2FA device!"))
+                return
+            reply_decrypt = client.cc.card_crypt_transaction_2FA(reply_encrypt, False)
+            chalresponse = reply_decrypt.split(":")[1]
             hmac = list(bytes.fromhex(chalresponse))
 
-            # send request
-            (response, sw1, sw2) = client.cc.card_reset_2FA_key(hmac)
-            if sw1 == 0x90 and sw2 == 0x00:
-                msg = _("2FA reset successfully!")
-                client.cc.needs_2FA = False
-                self.window.show_message(msg)
-            elif sw1 == 0x9c and sw2 == 0x17:
-                msg = _(
-                    f"Failed to reset 2FA: \nyou must reset the seed first (error code {hex(256*sw1+sw2)})")
-                self.window.show_error(msg)
-            else:
-                msg = _(
-                    f"Failed to reset 2FA with error code: {hex(256*sw1+sw2)}")
-                self.window.show_error(msg)
+            try:
+                (response, sw1, sw2) = client.cc.card_reset_2FA_key(hmac)
+                if sw1 == 0x90 and sw2 == 0x00:
+                    client.cc.needs_2FA = False
+                    self.window.show_message(_("2FA disabled successfully!"))
+                elif sw1 == 0x9c and sw2 == 0x17:
+                    self.window.show_error(_("You must reset the seed first before disabling 2FA."))
+                else:
+                    self.window.show_error(_("Failed to disable 2FA. Error: {}{}").format(hex(sw1), hex(sw2)))
+            except Exception as ex:
+                self.window.show_error(get_user_friendly_error(ex, "2FA reset"))
         else:
-            msg = _(f"2FA is already disabled!")
-            self.window.show_error(msg)
+            self.window.show_error(_("2FA is already disabled!"))
 
     def change_2FA_server(self, client):
-        _logger.info("in change_2FA_server")
-        help_txt = "Select 2FA server in the list:"
+        help_txt = _("Select the 2FA server to use for authentication:")
         option_name = "satochip_2FA_server"
-        options = SERVER_LIST  # ["server1", "server2", "server3"]
-        title = "Select 2FA server"
+        options = SERVER_LIST
+        title = _("Select 2FA Server")
         d = SelectOptionsDialog(option_name=option_name, options=options,
                                 parent=None, title=title, help_text=help_txt, config=self.config)
-        result = d.exec()  # result should be 0 or 1
+        d.exec()
 
     def verify_card(self, client):
-        # verify pin
         is_ok = client.verify_PIN()
         if not is_ok:
             return
 
-        # verify authenticity
-        is_authentic, txt_ca, txt_subca, txt_device, txt_error = self.card_verify_authenticity(
-            client)
+        is_authentic, txt_ca, txt_subca, txt_device, txt_error = self.card_verify_authenticity(client)
 
-        # wrap data for better display
-        tmp = ""
-        for line in txt_ca.splitlines():
-            tmp += textwrap.fill(line, 120, subsequent_indent="\t") + "\n"
-        txt_ca = tmp
-        tmp = ""
-        for line in txt_subca.splitlines():
-            tmp += textwrap.fill(line, 120, subsequent_indent="\t") + "\n"
-        txt_subca = tmp
-        tmp = ""
-        for line in txt_device.splitlines():
-            tmp += textwrap.fill(line, 120, subsequent_indent="\t") + "\n"
-        txt_device = tmp
+        # Wrap text for display
+        def wrap_text(txt, width=120):
+            return '\n'.join(textwrap.fill(line, width, subsequent_indent="\t") for line in txt.splitlines())
+
+        txt_ca = wrap_text(txt_ca)
+        txt_subca = wrap_text(txt_subca)
+        txt_device = wrap_text(txt_device)
 
         if is_authentic:
-            txt_result = 'Device authenticated successfully!'
+            txt_result = _('✓ Card authenticated successfully!')
         else:
-            txt_result = ''.join(['Error: could not authenticate the issuer of this card! \n',
-                                 'Reason: ', txt_error, '\n\n',
-                                  'If you did not load the card yourself, be extremely careful! \n',
-                                  'Contact support(at)satochip.io to report a suspicious device.'])
+            txt_result = ''.join([
+                _('✗ Could not authenticate this card!\n'),
+                _('Reason: {}\n\n').format(txt_error),
+                _('If you did not load this card yourself, be extremely careful!\n'),
+                _('Contact support@satochip.io to report a suspicious device.')
+            ])
+        
         d = DeviceCertificateDialog(
             parent=None,
-            title="Satochip certificate chain",
+            title=_("Satochip Certificate Chain"),
             is_authentic=is_authentic,
             txt_summary=txt_result,
             txt_ca=txt_ca,
             txt_subca=txt_subca,
             txt_device=txt_device,
         )
-        result = d.exec()
+        d.exec()
 
-    # todo: add this function in pysatochip
     def card_verify_authenticity(self, client):
-
-        cert_pem = txt_error = ""
+        cert_pem = ""
+        txt_error = ""
         try:
             cert_pem = client.cc.card_export_perso_certificate()
             _logger.info('Cert PEM: ' + str(cert_pem))
         except CardError:
-            txt_error = ''.join(["Unable to get device certificate: feature unsupported! \n",
-                                "Authenticity validation is only available starting with Satochip v0.12 and higher"])
+            txt_error = _("Feature unsupported. Requires Satochip v0.12 or higher.")
         except CardNotPresentError:
-            txt_error = "No card found! Please insert card."
+            txt_error = _("No card found! Please insert card.")
         except UnexpectedSW12Error as ex:
-            txt_error = "Exception during device certificate export: " + \
-                str(ex)
+            txt_error = _("Certificate export error: {}").format(str(ex))
 
         if cert_pem == "(empty)":
-            txt_error = "Device certificate is empty: the card has not been personalized!"
+            txt_error = _("Card has not been personalized.")
 
-        if txt_error != "":
+        if txt_error:
             return False, "(empty)", "(empty)", "(empty)", txt_error
 
-        # check the certificate chain from root CA to device
         from pysatochip.certificate_validator import CertificateValidator
         validator = CertificateValidator()
-        is_valid_chain, device_pubkey, txt_ca, txt_subca, txt_device, txt_error = validator.validate_certificate_chain(
-            cert_pem, client.cc.card_type)
+        is_valid_chain, device_pubkey, txt_ca, txt_subca, txt_device, txt_error = \
+            validator.validate_certificate_chain(cert_pem, client.cc.card_type)
         if not is_valid_chain:
             return False, txt_ca, txt_subca, txt_device, txt_error
 
-        # perform challenge-response with the card to ensure that the key is correctly loaded in the device
-        is_valid_chalresp, txt_error = client.cc.card_challenge_response_pki(
-            device_pubkey)
-
+        is_valid_chalresp, txt_error = client.cc.card_challenge_response_pki(device_pubkey)
         return is_valid_chalresp, txt_ca, txt_subca, txt_device, txt_error
 
     def change_card_label(self, client):
-        msg = ''.join([
-            _("You can optionaly add a label to your Satochip.\n"),
-            _("This label must be less than 64 chars long."),
-        ])
+        msg = _('Enter a label for your Satochip (max 64 characters):')
 
-        # verify pin
         is_ok = client.verify_PIN()
         if not is_ok:
-            # msg= f"action cancelled by user"
-            # self.window.show_error(msg)
             return
 
-        # label dialog
         label = self.change_card_label_dialog(client, msg)
         if label is None:
-            self.window.show_message(_("Operation aborted by user!"))
+            self.window.show_message(_("Operation cancelled."))
             return
 
-        # set new label
-        (response, sw1, sw2) = client.cc.card_set_label(label)
-        if sw1 == 0x90 and sw2 == 0x00:
-            self.window.show_message(_("Card label changed successfully!"))
-        elif sw1 == 0x6D and sw2 == 0x00:
-            # starts with satochip v0.12
-            self.window.show_error(_("Error: card does not support label!"))
-        else:
-            self.window.show_error(
-                f"Error while changing label: sw12={hex(sw1)} {hex(sw2)}")
+        try:
+            (response, sw1, sw2) = client.cc.card_set_label(label)
+            if sw1 == 0x90 and sw2 == 0x00:
+                self.window.show_message(_("Card label changed successfully!"))
+                # Refresh display
+                self.card_label_display.setText('<tt>%s' % (label if label else '(none)'))
+            elif sw1 == 0x6D and sw2 == 0x00:
+                self.window.show_error(_("This card does not support labels (requires v0.12+)."))
+            else:
+                self.window.show_error(_("Failed to change label. Error: {}{}").format(hex(sw1), hex(sw2)))
+        except Exception as ex:
+            self.window.show_error(get_user_friendly_error(ex, "label change"))
 
     def change_card_label_dialog(self, client, msg):
-        _logger.info("In change_card_label_dialog")
-        while (True):
-            parent = self.top_level_window()
-            d = WindowModalDialog(parent, _("Enter Label"))
-            pw = QLineEdit()
-            pw.setMinimumWidth(200)
-
-            vbox = QVBoxLayout()
-            vbox.addWidget(WWLabel(msg))
-            vbox.addWidget(pw)
-            vbox.addLayout(Buttons(CancelButton(d), OkButton(d)))
-            d.setLayout(vbox)
-
-            label = pw.text() if d.exec() else None
+        parent = self.top_level_window()
+        while True:
+            label = line_dialog(
+                parent=parent,
+                title=_("Enter Label"),
+                label=msg,
+                ok_label=_("OK"),
+            )
             if label is None or len(label.encode('utf-8')) <= 64:
                 return label
-            else:
-                self.window.show_error(
-                    _("Card label should not be longer than 64 chars!"))
-
+            self.window.show_error(_("Label must be 64 characters or less!"))
 
 class SelectOptionsDialog(WindowModalDialog):
 
@@ -740,9 +935,9 @@ class DeviceCertificateDialog(WindowModalDialog):
         # add summary text
         self.summary = QLabel(txt_summary)
         if is_authentic:
-            self.summary.setStyleSheet('color: green')
+            self.summary.setStyleSheet(ColorScheme.GREEN.as_stylesheet())
         else:
-            self.summary.setStyleSheet('color: red')
+            self.summary.setStyleSheet(ColorScheme.RED.as_stylesheet())
         self.summary.setWordWrap(True)
         self.layout.addWidget(self.summary)
 
@@ -936,17 +1131,126 @@ class WCSatochipSetup(WalletWizardComponent):
 ##########################
 
 
-class WCSeedMessage(WalletWizardComponent):
+class WCSeedMethodChoice(WalletWizardComponent):
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(self, parent, wizard, title=_('Satochip needs a seed'))
 
-        self.layout().addWidget(WWLabel('\n'.join(MSG_SEED_IMPORT)))
+        intro = WWLabel('\n'.join(MSG_SEED_IMPORT))
+        intro.setWordWrap(True)
+        self.layout().addWidget(intro)
+
+        message = _('How do you want to provide a seed for this Satochip card?')
+        choices = [
+            ChoiceItem(key='import', label=_('I already have a seed phrase')),
+            ChoiceItem(key='generate', label=_('Generate a new BIP39 seed phrase')),
+        ]
+        self.choice_w = ChoiceWidget(message=message, choices=choices, default_key='import')
+        self.layout().addWidget(self.choice_w)
         self.layout().addStretch(1)
 
         self._valid = True
 
     def apply(self):
-        pass
+        self.wizard_data['satochip_seed_method'] = self.choice_w.selected_key
+
+
+class WCSatochipGenerateSeed(WalletWizardComponent):
+    """Display a freshly generated BIP39 seed phrase for the user to write down.
+
+    Mirrors Electrum's WCCreateSeed pattern:
+    - Defers generation to on_ready() via QTimer so the page renders first.
+    - Uses Electrum's own SeedWidget (read-only mode) for display, which
+      shows the words in the standard format and provides an "Options" button
+      for the passphrase/extension checkbox.
+    - If the user enables "Extend seed with custom words", seed_extend is set
+      True and the wizard routes through satochip_have_ext (WCEnterExt) before
+      importing — exactly the same path as the "import" branch.
+    """
+
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(
+            self, parent, wizard, title=_('Your new BIP39 seed phrase')
+        )
+        self._seed = None
+        self.seed_widget = None
+
+        # Word-count selector + regenerate button — built before on_ready so
+        # they are visible immediately while the seed generates.
+        length_layout = QHBoxLayout()
+        length_layout.addWidget(QLabel(_('Seed length:')))
+        self.radio_12 = QRadioButton(_('12 words'))
+        self.radio_24 = QRadioButton(_('24 words'))
+        self.radio_24.setChecked(True)
+        # Connect both buttons: whichever transitions to checked=True triggers a refresh.
+        # Without connecting radio_24, clicking "24 words" only fires radio_12.toggled(False)
+        # which the handler ignores, so no new seed would be generated.
+        self.radio_12.toggled.connect(self._on_length_changed)
+        self.radio_24.toggled.connect(self._on_length_changed)
+        length_layout.addWidget(self.radio_12)
+        length_layout.addWidget(self.radio_24)
+        self.regen_btn = QPushButton(_('Regenerate'))
+        self.regen_btn.clicked.connect(self._on_regenerate_clicked)
+        length_layout.addWidget(self.regen_btn)
+        length_layout.addStretch(1)
+        self.layout().addLayout(length_layout)
+
+        self._busy = True  # stays busy until seed is generated in on_ready
+
+    def on_ready(self):
+        # Defer by one event-loop tick (same as WCCreateSeed) so the
+        # wizard page is fully rendered before we generate entropy.
+        QTimer.singleShot(1, self._create_seed)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+
+    def _current_length(self) -> int:
+        return 12 if self.radio_12.isChecked() else 24
+
+    def _create_seed(self):
+        self.busy = True
+        self._seed = _generate_bip39_mnemonic(self._current_length())
+
+        self.seed_widget = SeedWidget(
+            title=_('Your wallet generation seed is:'),
+            seed=self._seed,
+            options=['ext', 'bip39'],
+            msg=True,
+            parent=self,
+            config=self.wizard.config,
+        )
+        self.layout().addWidget(self.seed_widget)
+        self.layout().addStretch(1)
+
+        self.busy = False
+        self.valid = True  # same pattern as WCCreateSeed
+
+    def _refresh_seed(self):
+        """Generate a new seed and update the SeedWidget display."""
+        self._seed = _generate_bip39_mnemonic(self._current_length())
+        if self.seed_widget is not None:
+            self.seed_widget.seed_e.setText(self._seed)
+
+    def _on_length_changed(self, checked: bool) -> None:
+        # Each radio emits toggled(True) when selected and toggled(False) when
+        # deselected.  We only act on the newly-selected radio to avoid
+        # generating two seeds per click.
+        if checked:
+            self._refresh_seed()
+
+    def _on_regenerate_clicked(self) -> None:
+        self._refresh_seed()
+
+    # ------------------------------------------------------------------
+
+    def apply(self):
+        cosigner_data = self.wizard.current_cosigner(self.wizard_data)
+        cosigner_data['seed'] = self._seed
+        cosigner_data['seed_type'] = 'bip39'
+        cosigner_data['seed_variant'] = 'bip39'
+        # SeedWidget.is_ext is True when user enabled "Extend seed with custom words"
+        # via the Options button.  WCEnterExt will then populate seed_extra_words.
+        cosigner_data['seed_extend'] = bool(self.seed_widget and self.seed_widget.is_ext)
 
 
 class WCSeedSuccess(WalletWizardComponent):

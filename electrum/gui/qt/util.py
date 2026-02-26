@@ -554,6 +554,8 @@ class ChoiceWidget(QWidget):
             assert isinstance(c, ChoiceItem), f"{c=!r}"
             button = QRadioButton(gb2)
             button.setText(c.label)
+            if isinstance(c.extra_data, dict) and c.extra_data.get('tooltip'):
+                button.setToolTip(c.extra_data['tooltip'])
             vbox2.addWidget(button)
             group.addButton(button)
             group.setId(button, i)
