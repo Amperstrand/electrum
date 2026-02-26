@@ -2,8 +2,8 @@
   "name": "satochip",
   "fullname": "Satochip Wallet",
   "description": "Provides support for Satochip hardware wallet",
-  "requires": [["pysatochip","pypi.org/project/pysatochip/"]],
+  "requires": [["smartcard", "pypi.org/project/pyscard/"], ["pysatochip", "pypi.org/project/pysatochip/"]],
   "registers_keystore": ["hardware", "satochip", "Satochip wallet"],
   "icon":"satochip.png",
-  "available_for": ["qt"]
+  "available_for": ["qt", "cmdline"]
 }
