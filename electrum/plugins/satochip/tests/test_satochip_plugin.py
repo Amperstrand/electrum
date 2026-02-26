@@ -9,7 +9,7 @@ from electrum.util import UserFacingException
 
 from electrum.plugins.satochip import satochip
 from electrum.wallet import Standard_Wallet
-from . import ElectrumTestCase
+from tests import ElectrumTestCase
 
 
 class _DummyPlugin:

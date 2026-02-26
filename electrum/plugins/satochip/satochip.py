@@ -1,9 +1,9 @@
 from os import urandom
 import hashlib
-import inspect
-import re
+
+
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Optional
 import electrum_ecc as ecc
 from electrum_ecc.util import bip340_tagged_hash
 
@@ -35,167 +35,10 @@ from pysatochip.Satochip2FA import Satochip2FA, SERVER_LIST
 from smartcard.Exceptions import CardRequestTimeoutException, CardConnectionException
 from smartcard.CardType import AnyCardType
 from smartcard.CardRequest import CardRequest
-from smartcard.CardMonitoring import CardMonitor, CardObserver
+
 from smartcard.System import readers as list_pcsc_readers
 
 _logger = get_logger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Auto-extract card_get_status() field documentation from pysatochip source
-# ---------------------------------------------------------------------------
-def _extract_pysatochip_status_field_docs() -> Dict[str, str]:
-    """Parse CardConnector.card_get_status() source to extract field→comment mapping.
-
-    pysatochip annotates each status field with an inline comment like
-    ``# seed status (satochip)`` above the line that sets ``d["is_seeded"]``.
-    We scrape those comments so that tooltip text stays in sync with
-    pysatochip without duplicating documentation.
-    """
-    try:
-        source = inspect.getsource(CardConnector.card_get_status)
-    except (OSError, TypeError):
-        return {}
-
-    field_docs: Dict[str, str] = {}
-    section_comment = ""
-    for line in source.splitlines():
-        stripped = line.strip()
-        if stripped.startswith('#'):
-            section_comment = stripped.lstrip('# ').strip()
-            continue
-        m = re.search(r'd\["(\w+)"\]\s*=', stripped)
-        if m:
-            name = m.group(1)
-            if section_comment:
-                field_docs[name] = section_comment
-        if not stripped.startswith('#') and not m:
-            if stripped and not stripped.startswith(('if ', 'else', 'self.')):
-                section_comment = ""
-    return field_docs
-
-
-def _load_satochip_utils_about_hints() -> Dict[str, str]:
-    """Try to read display strings from the Satochip-Utils reference implementation.
-
-    Satochip-Utils ships alongside this repo (submodule) and its
-    ``frameCardAbout.py`` shows how the manufacturer presents status fields.
-    We extract those strings so our tooltips match the reference UI.
-    """
-    import os
-    hints: Dict[str, str] = {}
-    frame_path = os.path.join(
-        os.path.dirname(__file__), '..', '..', '..', 'Satochip-Utils', 'frameCardAbout.py')
-    frame_path = os.path.normpath(frame_path)
-    try:
-        with open(frame_path, 'r', encoding='utf-8') as f:
-            src = f.read()
-        if 'PIN0_remaining_tries' in src:
-            hints['PIN0_remaining_tries'] = 'PIN counter: [N] tries remaining (Satochip-Utils: frameCardAbout)'
-        if 'is_seeded' in src:
-            hints['is_seeded'] = 'Card seeded / Card not seeded (Satochip-Utils: frameCardAbout)'
-        if 'needs2FA' in src or 'needs_2FA' in src:
-            hints['needs2FA'] = '2FA enabled / 2FA disabled (Satochip-Utils: frameCardAbout)'
-        if 'setup_done' in src:
-            hints['setup_done'] = 'Card setup / Card requires setup (Satochip-Utils: frameCardAbout)'
-    except FileNotFoundError:
-        pass
-    except Exception as exc:
-        _logger.debug(f"_load_satochip_utils_about_hints: {exc}")
-    return hints
-
-
-def build_satochip_field_docs() -> Dict[str, str]:
-    """Merge auto-extracted docs from pysatochip and Satochip-Utils.
-
-    Returns a dict mapping field name → human-readable description.
-    pysatochip comments take priority; Satochip-Utils display strings are
-    appended as supplementary context.
-    """
-    docs = _extract_pysatochip_status_field_docs()
-    utils_hints = _load_satochip_utils_about_hints()
-    for key, hint in utils_hints.items():
-        if key in docs:
-            docs[key] = f"{docs[key]}  ({hint})"
-        else:
-            docs[key] = hint
-    return docs
-
-
-# Module-level cache; populated once at import time.
-SATOCHIP_STATUS_FIELD_DOCS: Dict[str, str] = build_satochip_field_docs()
-
-
-def build_satochip_tooltip(status_dict: Optional[dict], initialized: Optional[bool]) -> str:
-    """Build a tooltip for a Satochip device from the live status dict.
-
-    Uses auto-extracted field documentation from pysatochip's source code
-    and, when available, display hints from the Satochip-Utils reference
-    implementation.  If extraction failed, a minimal fallback is returned.
-    """
-    lines: List[str] = [
-        "pysatochip card_get_status() fields shown in the label:",
-        "",
-    ]
-    shown_fields = ('PIN0_remaining_tries', 'is_seeded', 'needs2FA', 'setup_done')
-    for field in shown_fields:
-        doc = SATOCHIP_STATUS_FIELD_DOCS.get(field, field)
-        if status_dict and field in status_dict:
-            val = status_dict[field]
-            lines.append(f"  {field} = {val}  —  {doc}")
-        else:
-            lines.append(f"  {field}  —  {doc}")
-
-    pv = status_dict.get('protocol_version') if status_dict else None
-    if pv is not None:
-        lines.append(f"  protocol_version = {pv}  —  {SATOCHIP_STATUS_FIELD_DOCS.get('protocol_version', 'protocol version')}")
-
-    lines.append("")
-    if initialized is None:
-        lines.append("Card state: setup_done=False (or no card).  The card needs initial PIN setup.")
-    elif initialized is False:
-        lines.append("Card state: setup_done=True, is_seeded=False.  A seed must be imported before use.")
-    else:
-        lines.append("Card state: setup_done=True, is_seeded=True.  The card is ready.")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Card insertion/removal observer for automatic UI rescan
-# ---------------------------------------------------------------------------
-class _SatochipCardEventObserver(CardObserver):
-    """Lightweight observer that fires registered callbacks on card insert/remove.
-
-    This is separate from pysatochip's internal ``RemovalObserver`` which
-    handles APDU-level reconnection.  Our observer only triggers UI-level
-    rescans (e.g. refreshing the device list in the wizard).
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._callbacks: List[Callable] = []
-
-    def register(self, callback: Callable) -> None:
-        if callback not in self._callbacks:
-            self._callbacks.append(callback)
-
-    def unregister(self, callback: Callable) -> None:
-        try:
-            self._callbacks.remove(callback)
-        except ValueError:
-            pass
-
-    def update(self, observable, actions):
-        (addedcards, removedcards) = actions
-        if not addedcards and not removedcards:
-            return
-        event = 'inserted' if addedcards else 'removed'
-        _logger.info(f"[SatochipCardEventObserver] card {event}")
-        for cb in list(self._callbacks):
-            try:
-                cb()
-            except Exception as exc:
-                _logger.debug(f"[SatochipCardEventObserver] callback error: {exc}")
 
 # version history for the plugin
 SATOCHIP_PLUGIN_REVISION = 'lib0.11.a-plugin0.1'
@@ -1088,14 +931,7 @@ class SatochipPlugin(HW_PluginBase):
         _logger.info(f"[SatochipPlugin] init()")
         HW_PluginBase.__init__(self, parent, config, name)
         self.device_manager().register_enumerate_func(self.detect_smartcard_reader)
-        self._card_event_observer = _SatochipCardEventObserver()
-        try:
-            self._card_monitor = CardMonitor()
-            self._card_monitor.addObserver(self._card_event_observer)
-            _logger.info("[SatochipPlugin] CardMonitor started for UI card events")
-        except Exception as exc:
-            _logger.info(f"[SatochipPlugin] CardMonitor unavailable: {exc}")
-            self._card_monitor = None
+
 
     @staticmethod
     def _explain_cardconnection_error(exc: Exception) -> str:
@@ -1127,18 +963,6 @@ class SatochipPlugin(HW_PluginBase):
             "Electrum could not establish a connection to your Satochip card.\n\n"
             "Low-level error: {}"
         ).format(text)
-
-    def register_card_event_callback(self, callback: Callable) -> None:
-        """Register *callback* to be invoked when a card is inserted or removed.
-
-        The callback is fired from the pyscard ``CardMonitor`` background
-        thread, so callers must marshal to their own thread (e.g. emit a
-        Qt signal) before touching the GUI.
-        """
-        self._card_event_observer.register(callback)
-
-    def unregister_card_event_callback(self, callback: Callable) -> None:
-        self._card_event_observer.unregister(callback)
 
     def get_library_version(self) -> str:
         """Return the version of the pysatochip library we are using."""

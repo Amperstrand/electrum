@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from . import ElectrumTestCase
+from tests import ElectrumTestCase
 from electrum.plugins.satochip import qt as satochip_qt
 from electrum.plugins.satochip import satochip
 

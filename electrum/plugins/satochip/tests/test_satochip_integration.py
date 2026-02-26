@@ -50,7 +50,7 @@ from types import SimpleNamespace
 from electrum.plugins.satochip import satochip
 from electrum.plugins.satochip.satochip import SatochipPlugin, SatochipClient
 from electrum.simple_config import SimpleConfig
-from tests.conftest import has_remote_pcscd
+from electrum.plugins.satochip.tests.conftest import has_remote_pcscd
 
 
 # =============================================================================
