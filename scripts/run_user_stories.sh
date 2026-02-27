@@ -21,7 +21,7 @@
 # ─── Parse CLI arguments ────────────────────────────────────────────────────
 
 headless=0
-story_filter=""
+story_filter=()
 no_reset=0
 extra_args=()
 
@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
                 echo "ERROR: --story requires a numeric argument (e.g. --story 2)" >&2
                 exit 1
             fi
-            story_filter="-k TestStory${2}"
+            story_filter=(-k "TestStory${2}")
             shift 2
             ;;
         --no-reset)
@@ -90,14 +90,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --story takes precedence over --no-reset
-if [[ -n "$story_filter" && $no_reset -eq 1 ]]; then
+if [[ ${#story_filter[@]} -gt 0 && $no_reset -eq 1 ]]; then
     echo "INFO: --story and --no-reset both specified; --story takes precedence, ignoring --no-reset"
     no_reset=0
 fi
 
 # If --no-reset and no --story, add exclusion filter
 if [[ $no_reset -eq 1 ]]; then
-    story_filter="-k 'not TestStory0FactoryReset'"
+    story_filter=(-k "not TestStory0FactoryReset")
 fi
 
 # ─── Banner ─────────────────────────────────────────────────────────────────
@@ -176,19 +176,18 @@ echo "pytest command:"
 echo "  python3 -m pytest -v \\"
 echo "    $test_file \\"
 echo "    --run-user-stories --allow-destructive-card-tests -s \\"
-if [[ -n "$story_filter" ]]; then
-    echo "    $story_filter \\"
+if [[ ${#story_filter[@]} -gt 0 ]]; then
+    echo "    ${story_filter[*]} \\"
 fi
 if [[ ${#extra_args[@]} -gt 0 ]]; then
     echo "    ${extra_args[*]}"
 fi
 echo ""
 
-# shellcheck disable=SC2086
 python3 -m pytest -v \
     "$test_file" \
     --run-user-stories --allow-destructive-card-tests -s \
-    $story_filter \
+    "${story_filter[@]}" \
     "${extra_args[@]}"
 
 pytest_exit_code=$?
