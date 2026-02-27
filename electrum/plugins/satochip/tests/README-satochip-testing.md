@@ -23,6 +23,9 @@ DYLD_LIBRARY_PATH=/tmp:$DYLD_LIBRARY_PATH \
 SATOCHIP_OBSERVE_GUI=1 \
 python3 -m pytest -v electrum/plugins/satochip/tests/test_satochip_integration.py \
   --allow-destructive-card-tests -s
+
+# Tier 4: User story lifecycle suite (ordered, requires card + runner script)
+./scripts/run_user_stories.sh
 ```
 
 ---
@@ -80,6 +83,16 @@ SATOCHIP_OBSERVE_GUI=1 \
 python3 -m pytest -v electrum/plugins/satochip/tests/test_satochip_integration.py::TestWalletSetupAndSign \
   --allow-destructive-card-tests -s
 ```
+
+---
+
+### Tier 4: User Story Lifecycle Suite (`test_satochip_user_stories.py`)
+
+Ordered, hardware-in-the-loop user story tests that exercise the card's full
+lifecycle in dependency order. Requires `--run-user-stories` and
+`--allow-destructive-card-tests` flags plus a physical card.
+
+See [User Story Test Suite](#user-story-test-suite) below for full details.
 
 ---
 
@@ -209,6 +222,110 @@ GUI screenshots at each step.
 
 ---
 
+## User Story Test Suite
+
+The user story suite in `test_satochip_user_stories.py` tests the card's full
+lifecycle as an ordered sequence. Each story runs in a fixed order and depends
+on the previous story leaving the card in a known, well-defined state. This
+mirrors how a real user interacts with the card: setup, normal use, PIN
+exhaustion, and PUK recovery.
+
+### Card State Machine
+
+```
+FACTORY_RESET ──(card_setup)──▶ INITIALIZED ──(import_seed)──▶ SEEDED
+     ▲                                                            │
+     │                                                    (5 wrong PINs)
+     │                                                            ▼
+     └──────────(GP factory reset)──────── SEEDED ◀──(PUK recovery)── PIN_BLOCKED
+```
+
+### Story Order
+
+| Order | Story | Class | Precondition | Postcondition |
+|-------|-------|-------|-------------|---------------|
+| 0 | Factory Reset | `TestStory0FactoryReset` | Any state | FACTORY_RESET |
+| 1 | Wallet Setup & Sign | `TestStory1WalletSetupAndSign` | FACTORY_RESET | SEEDED |
+| 2 | Wrong PIN Until Block | `TestStory2WrongPinUntilBlock` | SEEDED | PIN_BLOCKED |
+| 3 | PUK Recovery & Verify | `TestStory3PukRecoveryAndVerify` | PIN_BLOCKED | SEEDED |
+
+### How to Run
+
+```bash
+# Full suite with GUI observer
+./scripts/run_user_stories.sh
+
+# Headless (no GUI window)
+./scripts/run_user_stories.sh --headless
+
+# Single story only
+./scripts/run_user_stories.sh --story 2
+
+# Skip factory reset (if card already in known state)
+./scripts/run_user_stories.sh --no-reset
+
+# Or run directly with pytest:
+PCSCLITE_CSOCK_NAME=/tmp/pcscd-remote.comm \
+DYLD_LIBRARY_PATH=/tmp:$DYLD_LIBRARY_PATH \
+SATOCHIP_OBSERVE_GUI=1 \
+python3 -m pytest -v electrum/plugins/satochip/tests/test_satochip_user_stories.py \
+  --run-user-stories --allow-destructive-card-tests -s
+```
+
+### Cascade Skip Pattern
+
+If a story fails, all subsequent stories are automatically skipped. This
+prevents destructive operations on a card in an unknown state. The mechanism
+is a module-level `_cascade_skip` dict: each story sets
+`_cascade_skip["story_N"] = "passed"` on success or
+`_cascade_skip["story_N"] = "FAILED: reason"` on failure. The next story
+checks the dict at its start and calls `pytest.skip()` if the prerequisite
+didn't pass.
+
+⚠ **Never run Story 2 or Story 3 in isolation** without first confirming the
+card is in the expected precondition state.
+
+### Artifacts
+
+Each story produces a dedicated artifact directory under pytest's `tmp_path`:
+
+```
+<tmp_path>/
+  story-1-wallet-setup-and-sign/
+    story-1-wallet-setup-and-sign.jsonl   # Timestamped event log
+    screenshots/
+      step01_check_blank.png
+      step02_card_setup.png
+      step03_import_seed.png
+      ...
+  story-2-wrong-pin-until-block/
+    story-2-wrong-pin-until-block.jsonl
+    screenshots/
+      ...
+```
+
+JSONL event fields match the format described in the [Artifacts](#artifacts) section above.
+
+### How to Add a New Story
+
+1. Create a new test class in `test_satochip_user_stories.py` following the
+   existing class structure.
+2. Add `@pytest.mark.order(N)` (next number in sequence) to the class.
+3. At the start of the test method, check `_cascade_skip` for the prerequisite
+   story and call `pytest.skip()` if it didn't pass.
+4. Set up artifacts with `StoryArtifacts` and the observer with
+   `create_gui_observer()` from `story_helpers.py`.
+5. Use `set_status()` and `record_event()` throughout for logging and
+   screenshots.
+6. Call `require_card_state()` to assert (and skip) based on card state.
+7. On success, set `_cascade_skip["story_N"] = "passed"`. On any failure
+   path, set `_cascade_skip["story_N"] = "FAILED: reason"` before calling
+   `pytest.fail()`.
+8. Update the Story Order table above and the [Adding New User Stories](#adding-new-user-stories)
+   section.
+
+---
+
 ## Test Constants
 
 | Constant | Value | Usage |
@@ -223,7 +340,8 @@ GUI screenshots at each step.
 
 ## Adding New User Stories
 
-1. Create a new test class in `test_satochip_integration.py`
+1. Create a new test class in `test_satochip_user_stories.py` (for ordered lifecycle stories)
+   or `test_satochip_integration.py` (for standalone destructive tests)
 2. Mark with `@pytest.mark.destructive_card` if it changes card state
 3. Use the `_set_status()` / `_record()` pattern for logging and screenshots
 4. Document the user story in this README
