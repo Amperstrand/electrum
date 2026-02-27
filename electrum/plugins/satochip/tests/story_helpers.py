@@ -308,11 +308,40 @@ def apdu_factory_reset(
 
         time.sleep(2.0)
 
+        try:
+            from pysatochip.CardConnector import CardNotPresentError
+        except ImportError:
+            CardNotPresentError = Exception
+        try:
+            from pysatochip.CardConnector import CardResetToFactoryError
+        except ImportError:
+            CardResetToFactoryError = None
+
         step_count = 0
         cla_retries = 0
+        cnp_retries = 0
+        MAX_CNP_RETRIES = 5
 
         while True:
-            (_, sw1, sw2) = cc.card_reset_factory_signal()
+            try:
+                (_, sw1, sw2) = cc.card_reset_factory_signal()
+                cnp_retries = 0  # reset on success
+            except CardNotPresentError:
+                cnp_retries += 1
+                if cnp_retries > MAX_CNP_RETRIES:
+                    raise RuntimeError(
+                        f"Factory reset failed: card not present after {MAX_CNP_RETRIES} retries."
+                    )
+                status_fn("Card not detected. Reinsert card...", "reset_card_not_present")
+                if not wait_for_card_present(cc, timeout=timeout_per_step, app=app):
+                    raise RuntimeError("Factory reset timed out waiting for card reinsertion.")
+                time.sleep(2.0)
+                continue
+            except Exception as _e:
+                if CardResetToFactoryError is not None and isinstance(_e, CardResetToFactoryError):
+                    cc.card_disconnect()
+                    return True
+                raise
 
             if sw1 == 0xFF and sw2 == 0x00:
                 cc.card_disconnect()
