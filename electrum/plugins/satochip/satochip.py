@@ -28,8 +28,9 @@ from electrum.hw_wallet  import HW_PluginBase, HardwareClientBase
 # pysatochip
 import pysatochip
 from pysatochip.CardConnector import CardConnector, UninitializedSeedError
-from pysatochip.CardConnector import CardNotPresentError, UnexpectedSW12Error, WrongPinError, PinBlockedError, PinRequiredError
+from pysatochip.CardConnector import CardNotPresentError, UnexpectedSW12Error, WrongPinError, PinBlockedError, PinRequiredError, CardResetToFactoryError, CardSetupNotDoneError
 from pysatochip.Satochip2FA import Satochip2FA, SERVER_LIST
+from .logging_utils import instrument_module_function_entries
 
 # pyscard
 from smartcard.Exceptions import CardRequestTimeoutException, CardConnectionException
@@ -154,11 +155,20 @@ class SatochipClient(HardwareClientBase):
         # the device as "uninitialized" for the purposes of DeviceInfo.
         try:
             time.sleep(0.3)
+            if not self._ensure_card_connection():
+                _logger.info("SATOCHIP is_initialized() connection not ready")
+                return None
             (response, sw1, sw2, d) = self.cc.card_get_status()
         except CardNotPresentError:
             _logger.info("SATOCHIP is_initialized() None (no card present)")
             return None
 
+        # Check for communication error (setup_done=None indicates unknown state from card_get_status)
+        if self.cc.setup_done is None:
+            _logger.warning(
+                "SATOCHIP is_initialized() None (communication error - card state unknown)")
+            return None
+        
         # if setup is not done, we return None (factory‑fresh card)
         if not self.cc.setup_done:
             _logger.info("SATOCHIP is_initialized() None (no setup)")
@@ -175,9 +185,28 @@ class SatochipClient(HardwareClientBase):
                 "SATOCHIP is_initialized() True (PIN set and card seeded)"
             )
             return True
+        
+        # Fallback - should not reach here
+        _logger.warning(f"SATOCHIP is_initialized() unexpected state: setup_done={self.cc.setup_done}, is_seeded={self.cc.is_seeded}")
+        return None
 
     def get_soft_device_id(self):
         return self._soft_device_id
+
+    def _ensure_card_connection(self, timeout: float = 3.0) -> bool:
+        """Wait for pysatochip's RemovalObserver to finish setting up cardservice.connection.
+        Returns True if the card is present and connection is ready, False on timeout.
+        """
+        start = time.time()
+        while (time.time() - start) < timeout:
+            if not getattr(self.cc, 'card_present', False):
+                time.sleep(0.15)
+                continue
+            cs = getattr(self.cc, 'cardservice', None)
+            if cs is not None and hasattr(getattr(cs, 'connection', None), 'transmit'):
+                return True
+            time.sleep(0.15)
+        return False
 
     # Card label sentinel values returned by pysatochip when no label is stored
     # or when the card does not support the label feature.
@@ -206,11 +235,18 @@ class SatochipClient(HardwareClientBase):
             will return SW=0x6D00; pysatochip maps that to '(none)' as well.
         """
         try:
+            if not self._ensure_card_connection():
+                return "Satochip"
             status = None
+            blocked_via_exception = False
             try:
                 (_resp, _sw1, _sw2, status) = self.cc.card_get_status()
             except CardNotPresentError:
                 return "Satochip (no card inserted)"
+            except PinBlockedError:
+                # Card is blocked; card_get_status (or its auth handshake) raised.
+                # Return immediately with blocked sentinel — don't call card_get_label etc.
+                return "Satochip [blocked]"
             except Exception:
                 status = None
 
@@ -245,6 +281,9 @@ class SatochipClient(HardwareClientBase):
                 pin_tries = status.get("PIN0_remaining_tries")
                 if pin_tries is not None:
                     suffix_parts.append(f"PIN0_remaining_tries={pin_tries}")
+                # Mark blocked cards so the wizard can offer factory reset at device selection.
+                if pin_tries == 0:
+                    suffix_parts.append("blocked")
                 if "is_seeded" in status:
                     suffix_parts.append(
                         f"is_seeded={status['is_seeded']}"
@@ -292,7 +331,9 @@ class SatochipClient(HardwareClientBase):
     def has_usable_connection_with_device(self):
         _logger.info(f"has_usable_connection_with_device()")
         try:
-            # (response, sw1, sw2)= self.cc.card_select() #TODO: something else? get ATR?
+            if self.cc.cardservice is None:
+                _logger.info("has_usable_connection_with_device: no cardservice (card removed?)")
+                return False
 
             atr = self.cc.card_get_ATR()
             _logger.info("Card ATR: " + bytes(atr).hex())
@@ -364,8 +405,29 @@ class SatochipClient(HardwareClientBase):
 
             # unrecoverable errors
             except PinBlockedError:
+                # Card has 0 PIN tries left; only recovery is factory reset. Run it automatically
+                # (no confirmation dialog — user already chose to proceed with this device).
+                try:
+                    self.perform_factory_reset()
+                    self.request('show_message',
+                        _("Factory reset completed successfully!\n\n"
+                          "Your Satochip has been returned to factory state. "
+                          "You can now set it up again with a new PIN and seed."))
+                except UserFacingException:
+                    raise
+                except Exception as e:
+                    raise UserFacingException(_("Factory reset failed: {}").format(e))
+                return False
+            except CardSetupNotDoneError:
+                # Card has not been set up (factory-fresh or factory reset).
+                # This is a critical error for existing wallets - the user needs to
+                # set up the card and import the seed that matches the wallet.
                 raise UserFacingException(
-                    f"Too many failed attempts! Your device has been blocked! \n\nYou need to factory reset your card (error code 0x9C0C)")
+                    _("This Satochip has not been set up yet.\n\n")
+                    + _("The card needs to be initialized with a PIN and seed before it can be used.\n")
+                    + _("If you are opening an existing wallet, you must import the SAME seed that was used to create this wallet.\n\n")
+                    + _("Please use 'Create new wallet' with this card to set it up, or use Satochip-Utils to initialize the card.")
+                )
             except UnexpectedSW12Error as ex:
                 raise UserFacingException(
                     f"Unexpected error during PIN verification: {ex}")
@@ -479,6 +541,151 @@ class SatochipClient(HardwareClientBase):
             else:
                 return True, oldpin, newpin
 
+    def _wait_for_card_absent(self, timeout: float = 30.0) -> bool:
+        """Block until the card is physically removed or timeout expires.  Returns True if removed."""
+        start = time.time()
+        while self.cc.card_present and (time.time() - start) < timeout:
+            time.sleep(0.3)
+        return not self.cc.card_present
+
+    def _wait_for_card_present(self, timeout: float = 60.0) -> bool:
+        """Block until the card is physically inserted and pysatochip has established
+        a connection.  The card monitor sets card_present before the connection is
+        ready, so we also wait for cardservice.connection to be valid.
+        """
+        start = time.time()
+        while (time.time() - start) < timeout:
+            if not self.cc.card_present:
+                time.sleep(0.3)
+                continue
+            # card_present is True, but RemovalObserver may not have finished
+            # setting cardservice.connection yet — wait for it
+            if getattr(self.cc, 'cardservice', None) and hasattr(
+                    getattr(self.cc.cardservice, 'connection', None), 'transmit'):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def perform_factory_reset(self):
+        """Perform a factory reset of the Satochip card using the legacy multi-signal method.
+
+        Supported on Satochip firmware v0.12-0.4 and newer.  The process requires
+        sending a special APDU several times; between each send the user must
+        physically remove and reinsert the card.  The card's internal counter
+        decrements with each accepted signal until it reaches zero and the reset fires.
+
+        Card removal/reinsertion is detected automatically via the pysatochip card
+        monitor — no manual button clicks required between steps.
+
+        Raises UserFacingException on version incompatibility or any card-level error.
+        Returns True on successful reset.
+        """
+        card_type = getattr(self.cc, "card_type", None)
+        if card_type != "Satochip":
+            raise UserFacingException(
+                _("Factory reset in this plugin only supports Satochip cards. "
+                  "Detected card type: {}.").format(card_type or "unknown")
+            )
+
+        # Verify the firmware is new enough to support factory reset (v0.12-0.4+).
+        try:
+            (response, sw1, sw2, d) = self.cc.card_get_status()
+            vmaj = d.get("protocol_major_version", 0)
+            vmin = d.get("protocol_minor_version", 0)
+            amaj = d.get("applet_major_version", 0)
+            amin = d.get("applet_minor_version", 0)
+            version = (vmaj << 24) + (vmin << 16) + (amaj << 8) + amin
+            version_min = (12 << 16) + 4  # v0.12-0.4
+            if version < version_min:
+                raise UserFacingException(
+                    _("Factory reset is not supported on this card.\n\n"
+                      "Your firmware (v{}.{}-{}.{}) is too old — "
+                      "factory reset requires v0.12-0.4 or newer.").format(vmaj, vmin, amaj, amin))
+        except UserFacingException:
+            raise
+        except Exception as e:
+            raise UserFacingException(
+                _("Factory reset aborted: unable to verify Satochip firmware version ({})").format(e)
+            )
+
+        # Tell pysatochip's RemovalObserver to skip card_get_status and secure_channel
+        # on each reinsert (see CardConnector.py RemovalObserver). Otherwise the observer
+        # tries to init the secure channel on a blocked card and can leave the connection
+        # in a bad state, causing 0x6E00 or "Invalid protocol in transmit".
+        self.cc.set_mode_factory_reset(True)
+        try:
+            step_count = 0  # Number of removal/reinsertion cycles completed.
+
+            def _prompt_remove(step_msg=None):
+                self.request('show_message', step_msg or _(
+                    "Factory reset: please REMOVE your Satochip card from the reader..."))
+                if not self._wait_for_card_absent():
+                    raise UserFacingException(_("Factory reset timed out waiting for card removal."))
+
+            def _prompt_reinsert(steps_remaining=None):
+                if steps_remaining is not None:
+                    msg = _("Card removed. Reinsert to continue ({} step(s) remaining)...").format(
+                        steps_remaining)
+                else:
+                    msg = _("Card removed. Please reinsert it to continue...")
+                self.request('show_message', msg)
+                if not self._wait_for_card_present():
+                    raise UserFacingException(_("Factory reset timed out waiting for card reinsertion."))
+                # Reference CLI waits for user to confirm after reinsert, so the observer has
+                # time to finish CPLC + card_select() before the next APDU. We have no confirm,
+                # so wait here for the observer to complete; otherwise we send before the
+                # Satochip applet is selected and get 0x6E00 (CLA not supported).
+                time.sleep(2.0)
+
+            # The factory reset APDU is only accepted by the card from a fresh session.
+            # Cycle the card once before sending the first signal.
+            _prompt_remove()
+            _prompt_reinsert()
+
+            # Send the reset signal repeatedly.  Card removal/reinsertion is detected
+            # automatically — no manual OK clicks.  sw2 is the steps-remaining counter.
+            while True:
+                try:
+                    (response, sw1, sw2) = self.cc.card_reset_factory_signal()
+                except CardNotPresentError:
+                    _prompt_reinsert(steps_remaining="?")
+                    continue
+                except CardResetToFactoryError:
+                    self.cc.card_disconnect()
+                    return True
+
+                if sw1 == 0xFF and sw2 == 0x00:
+                    self.cc.card_disconnect()
+                    return True
+                elif sw1 == 0xFF and sw2 == 0xFF:
+                    # Card was not removed since the last signal — wait and retry.
+                    step_count += 1
+                    self.request('show_message', _(
+                        "Step {}: remove your Satochip card...").format(step_count))
+                    _prompt_remove()
+                    _prompt_reinsert()
+                elif sw1 == 0xFF and sw2 > 0x00:
+                    step_count += 1
+                    self.request('show_message', _(
+                        "Step {} ({} remaining): remove your Satochip card...").format(
+                        step_count, sw2))
+                    _prompt_remove()
+                    _prompt_reinsert(steps_remaining=sw2)
+                elif sw1 == 0x9C and sw2 == 0x04:
+                    raise UserFacingException(
+                        _("Factory reset failed: the card has not been set up yet (error 0x9C04)."))
+                elif sw1 == 0x6D and sw2 == 0x00:
+                    raise UserFacingException(
+                        _("Factory reset failed: instruction not supported (error 0x6D00)."))
+                elif sw1 == 0x6E and sw2 == 0x00:
+                    raise UserFacingException(
+                        _("Factory reset failed: class not supported (error 0x6E00)."))
+                else:
+                    raise UserFacingException(
+                        _("Factory reset failed with unexpected error: {}").format(hex(256 * sw1 + sw2)))
+        finally:
+            self.cc.set_mode_factory_reset(False)
+
 
 class Satochip_KeyStore(Hardware_KeyStore):
     hw_type = 'satochip'
@@ -543,10 +750,10 @@ class Satochip_KeyStore(Hardware_KeyStore):
                 f"Expected: {expected_authentikey}, "
                 f"Connected: {actual_authentikey}"
             )
-            raise RuntimeError(
-                f"Wrong Satochip connected! "
-                f"Expected card with fingerprint {expected_authentikey}, "
-                f"Connected card has fingerprint {actual_authentikey}"
+            raise UserFacingException(
+                _("Wrong Satochip connected! ") +
+                _("This card does not match the wallet. ") +
+                _("Please connect the correct Satochip for this wallet.")
             )
         
         # All good - cache for next check
@@ -1073,6 +1280,45 @@ class SatochipPlugin(HW_PluginBase):
         if not client:
             raise Exception(_("The device was disconnected."))
 
+        # Check current card state before attempting setup
+        _logger.info(f"[SatochipPlugin] _setup_device(): checking card state before setup...")
+        try:
+            (_r, _sw1, _sw2, status) = client.cc.card_get_status()
+            setup_done = status.get('setup_done')
+            is_seeded = status.get('is_seeded')
+            _logger.info(f"[SatochipPlugin] _setup_device(): card state = setup_done={setup_done}, is_seeded={is_seeded}")
+            
+            # Check for communication error (setup_done=None indicates unknown state)
+            if setup_done is None:
+                _logger.error("[SatochipPlugin] _setup_device(): cannot determine card state - communication error?")
+                raise UserFacingException(
+                    _("Cannot communicate with the card. ") +
+                    _("Please check the card reader connection and try again. ") +
+                    _("If the problem persists, unplug and replug the card reader.")
+                )
+            
+            # Check if card is already set up
+            if setup_done:
+                _logger.warning(f"[SatochipPlugin] _setup_device(): card already set up (setup_done=True)")
+                if is_seeded:
+                    raise UserFacingException(
+                        _("This card is already fully initialized with a seed. ") +
+                        _("No setup is needed - you can unlock the card directly.")
+                    )
+                else:
+                    raise UserFacingException(
+                        _("This card already has a PIN set but no seed. ") +
+                        _("You should import a seed instead of running setup again.")
+                    )
+        except UserFacingException:
+            raise
+        except Exception as e:
+            _logger.warning(f"[SatochipPlugin] _setup_device(): could not check card state: {e}")
+            raise UserFacingException(
+                _("Cannot communicate with the card: {}").format(e) + " " +
+                _("Please check the card reader connection and try again.")
+            )
+        
         # check that card is indeed a Satochip
         if client.cc.card_type != "Satochip":
             raise Exception(_('Failed to create a client for this device.') + '\n' +
@@ -1120,20 +1366,30 @@ class SatochipPlugin(HW_PluginBase):
                 client.handler.show_message(
                     f"Satochip setup performed successfully!")
             elif sw1 == 0x9c and sw2 == 0x07:
+                # SW_OBJECT_NOT_FOUND (0x9C07): Card already has PIN/objects set up
+                # This should not happen if the pre-check above worked, but handle it anyway
                 _logger.error(
-                    f"[SatochipPlugin] _setup_device(): error applet setup already done (code {hex(sw1*256+sw2)})")
-                client.handler.show_error(
-                    f"Satochip error: applet setup already done (code {hex(sw1*256+sw2)})")
+                    f"[SatochipPlugin] _setup_device(): card_setup returned 0x9C07 (SW_OBJECT_NOT_FOUND) - "
+                    f"card already initialized. This may indicate a race condition or communication issue.")
+                raise UserFacingException(
+                    _("This card is already initialized. ") +
+                    _("If you want to set up this card, you need to factory reset it first."))
             else:
+                sw_code = f"0x{sw1:02x}{sw2:02x}"
                 _logger.error(
-                    f"[SatochipPlugin] _setup_device(): unable to set up applet!  sw12={hex(sw1)} {hex(sw2)}")
-                client.handler.show_error(
-                    f"[SatochipPlugin] _setup_device(): unable to set up applet!  sw12={hex(sw1)} {hex(sw2)}")
+                    f"[SatochipPlugin] _setup_device(): card_setup failed with SW={sw_code}")
+                # Provide helpful context for common errors
+                if sw1 == 0x6e:
+                    raise UserFacingException(
+                        _("Card reader communication error (SW={}). ").format(sw_code) +
+                        _("Please unplug and replug the card reader, then try again."))
+                else:
+                    raise UserFacingException(
+                        _("Failed to set up card (error code: {}").format(sw_code) + ")")
         except Exception as ex:
             _logger.error(
                 f"[SatochipPlugin] _setup_device(): exception during setup: {ex}")
-            client.handler.show_error(
-                f"[SatochipPlugin] _setup_device(): exception during setup: {ex}")
+            raise
 
         # verify pin:
         client.verify_PIN()
@@ -1152,7 +1408,7 @@ class SatochipPlugin(HW_PluginBase):
         if seed_type != 'bip39':
             _logger.error(
                 f"[SatochipPlugin] _import_seed() wrong seed type!")
-            raise Exception(f'Wrong seed type {seed_type}: only BIP39 is supported!')
+            raise UserFacingException(_(f'Wrong seed type {seed_type}: only BIP39 is supported!'))
 
         # check seed validity
         (is_checksum_valid, is_wordlist_valid) = bip39_is_checksum_valid(seed)
@@ -1164,7 +1420,7 @@ class SatochipPlugin(HW_PluginBase):
         else:
             _logger.error(
                 f"[SatochipPlugin] _import_seed() wrong seed format!")
-            raise Exception('Wrong BIP39 mnemonic format!')
+            raise UserFacingException(_('Wrong BIP39 mnemonic format!'))
 
         # verify pin:
         client.verify_PIN()
@@ -1189,6 +1445,12 @@ class SatochipPlugin(HW_PluginBase):
         _logger.info(
             f"[SatochipPlugin] wizard_entry_for_device() new_wallet: {new_wallet}")
 
+        # Blocked cards (PIN tries exhausted) get the factory-reset page first.
+        label_str = (device_info.label or "").lower()
+        if "blocked" in label_str:
+            _logger.info("[SatochipPlugin] wizard_entry_for_device() device is blocked -> satochip_blocked")
+            return 'satochip_blocked'
+
         device_state = device_info.initialized  # can be None, False or True.
         # None is used to distinguish a completely new card from a card where the seed has been reset, but the PIN is still set.
         _logger.info(
@@ -1201,12 +1463,20 @@ class SatochipPlugin(HW_PluginBase):
             else:
                 return 'satochip_start'
         else:
-            # todo: assert is_setup & is_seeded
-            if device_state is not True:
-                # This can happen if you reset the seed of the Satochip for an existing wallet, then try to open that wallet file.
-                _logger.error(
-                    f"[SatochipPlugin] wizard_entry_for_device() existing wallet with non-seeded Satochip!")
-            return 'satochip_unlock'
+            # For existing wallets, the card MUST be seeded (device_state=True)
+            # If not seeded, offer to import the seed that matches the wallet
+            if device_state is None:
+                # Factory-fresh card - user must set up PIN first, then import seed
+                _logger.info(
+                    f"[SatochipPlugin] wizard_entry_for_device() existing wallet with factory-fresh Satochip - needs setup")
+                return 'satochip_recover_setup'
+            elif device_state is False:
+                # PIN set but no seed - user can import seed directly
+                _logger.info(
+                    f"[SatochipPlugin] wizard_entry_for_device() existing wallet with unseeded Satochip - needs seed")
+                return 'satochip_recover_seed'
+            else:
+                return 'satochip_unlock'
 
     # insert satochip pages in new wallet wizard
     def extend_wizard(self, wizard: 'NewWalletWizard'):
@@ -1243,6 +1513,16 @@ class SatochipPlugin(HW_PluginBase):
             'satochip_unlock': {
                 'last': True
             },
+            'satochip_wrong_card': {
+                'last': True
+            },
+            # Seed recovery for existing wallets
+            'satochip_recover_setup': {
+                'next': 'satochip_recover_seed',
+            },
+            'satochip_recover_seed': {
+                'last': True  # Will trigger unlock after seed import
+            },
         }
         wizard.navmap_merge(views)
 
@@ -1261,3 +1541,6 @@ class SatochipPlugin(HW_PluginBase):
         sequence = wallet.get_address_index(address)
         txin_type = wallet.get_txin_type(address)
         keystore.show_address(sequence, txin_type)
+
+
+instrument_module_function_entries(_logger, globals(), __name__)

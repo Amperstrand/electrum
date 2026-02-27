@@ -230,6 +230,15 @@ class TestSatochipClient(ElectrumTestCase):
         cc.card_get_ATR.side_effect = Exception("reader error")
         self.assertFalse(c.has_usable_connection_with_device())
 
+    def test_has_usable_connection_with_device_no_cardservice(self):
+        """Null cardservice (card removed) returns False without exception."""
+        cc = MagicMock()
+        cc.cardservice = None
+        c = self._mk_client(cc=cc)
+        self.assertFalse(c.has_usable_connection_with_device())
+        # card_get_ATR should never be called when cardservice is None
+        cc.card_get_ATR.assert_not_called()
+
     def test_request_dispatch(self):
         handler = MagicMock()
         handler.update_status.return_value = "ok"
@@ -321,6 +330,81 @@ class TestSatochipClient(ElectrumTestCase):
         c.verify_PIN = lambda pin=None: True
         with self.assertRaises(UserFacingException):
             c.get_xpub("m/84h/0h/0h", "p2wpkh")
+
+    def test_perform_factory_reset_rejects_non_satochip_card(self):
+        cc = MagicMock()
+        cc.card_type = "SeedKeeper"
+        c = self._mk_client(cc=cc, handler=MagicMock())
+
+        with self.assertRaises(UserFacingException) as ctx:
+            c.perform_factory_reset()
+        self.assertIn("only supports Satochip cards", str(ctx.exception))
+        cc.set_mode_factory_reset.assert_not_called()
+
+    def test_perform_factory_reset_aborts_if_version_check_fails(self):
+        cc = MagicMock()
+        cc.card_type = "Satochip"
+        cc.card_get_status.side_effect = RuntimeError("status unavailable")
+        c = self._mk_client(cc=cc, handler=MagicMock())
+
+        with self.assertRaises(UserFacingException) as ctx:
+            c.perform_factory_reset()
+        self.assertIn("unable to verify Satochip firmware version", str(ctx.exception))
+        cc.set_mode_factory_reset.assert_not_called()
+
+    def test_perform_factory_reset_satochip_success_path(self):
+        cc = MagicMock()
+        cc.card_type = "Satochip"
+        cc.card_get_status.return_value = (
+            [],
+            0x90,
+            0x00,
+            {
+                "protocol_major_version": 0,
+                "protocol_minor_version": 12,
+                "applet_major_version": 0,
+                "applet_minor_version": 4,
+            },
+        )
+        cc.card_reset_factory_signal.return_value = ([], 0xFF, 0x00)
+
+        c = self._mk_client(cc=cc, handler=MagicMock())
+        c._wait_for_card_absent = MagicMock(return_value=True)
+        c._wait_for_card_present = MagicMock(return_value=True)
+        c.request = MagicMock()
+
+        self.assertTrue(c.perform_factory_reset())
+        cc.set_mode_factory_reset.assert_any_call(True)
+        cc.card_reset_factory_signal.assert_called_once()
+        cc.card_disconnect.assert_called_once()
+        cc.set_mode_factory_reset.assert_any_call(False)
+
+    def test_perform_factory_reset_fails_immediately_on_6e00(self):
+        cc = MagicMock()
+        cc.card_type = "Satochip"
+        cc.card_get_status.return_value = (
+            [],
+            0x90,
+            0x00,
+            {
+                "protocol_major_version": 0,
+                "protocol_minor_version": 12,
+                "applet_major_version": 0,
+                "applet_minor_version": 4,
+            },
+        )
+        cc.card_reset_factory_signal.return_value = ([], 0x6E, 0x00)
+
+        c = self._mk_client(cc=cc, handler=MagicMock())
+        c._wait_for_card_absent = MagicMock(return_value=True)
+        c._wait_for_card_present = MagicMock(return_value=True)
+        c.request = MagicMock()
+
+        with self.assertRaises(UserFacingException) as ctx:
+            c.perform_factory_reset()
+        self.assertIn("0x6E00", str(ctx.exception))
+        cc.card_reset_factory_signal.assert_called_once()
+        cc.set_mode_factory_reset.assert_any_call(False)
 
 
 class TestSatochipKeystore(ElectrumTestCase):
@@ -517,6 +601,7 @@ class TestSatochipPlugin(ElectrumTestCase):
                 card_type="Satochip",
                 set_pin=MagicMock(),
                 card_setup=lambda *a: ([], 0x90, 0x00),
+                card_get_status=lambda: ([], 0x90, 0x00, {'setup_done': False, 'is_seeded': False}),
                 card_bip32_import_seed=MagicMock(return_value=SimpleNamespace(get_public_key_hex=lambda compressed: "02aa")),
             ),
             handler=MagicMock(),
@@ -544,13 +629,13 @@ class TestSatochipPlugin(ElectrumTestCase):
 
     def test_wizard_entry_and_extend(self):
         p = self._mk_plugin()
-        di_none = SimpleNamespace(initialized=None)
-        di_false = SimpleNamespace(initialized=False)
-        di_true = SimpleNamespace(initialized=True)
+        di_none = SimpleNamespace(initialized=None, label="")
+        di_false = SimpleNamespace(initialized=False, label="")
+        di_true = SimpleNamespace(initialized=True, label="")
         self.assertEqual("satochip_not_setup", p.wizard_entry_for_device(di_none, new_wallet=True))
         self.assertEqual("satochip_not_seeded", p.wizard_entry_for_device(di_false, new_wallet=True))
         self.assertEqual("satochip_start", p.wizard_entry_for_device(di_true, new_wallet=True))
-        self.assertEqual("satochip_unlock", p.wizard_entry_for_device(di_false, new_wallet=False))
+        self.assertEqual("satochip_recover_seed", p.wizard_entry_for_device(di_false, new_wallet=False))
 
         wizard = SimpleNamespace(navmap_merge=MagicMock(), wallet_password_view=lambda d: "pw", last_cosigner=lambda d: True, maybe_master_pubkey=lambda d: True, is_single_password=lambda: True)
         p.extend_wizard(wizard)
@@ -593,14 +678,14 @@ class TestSatochipPlugin(ElectrumTestCase):
     def test_wizard_entry_existing_wallet_true_state(self):
         """Existing wallet with initialized=True returns satochip_unlock."""
         p = self._mk_plugin()
-        di = SimpleNamespace(initialized=True)
+        di = SimpleNamespace(initialized=True, label="")
         self.assertEqual("satochip_unlock", p.wizard_entry_for_device(di, new_wallet=False))
 
     def test_wizard_entry_existing_wallet_none_state(self):
-        """Existing wallet with initialized=None still returns satochip_unlock (logs error)."""
+        """Existing wallet with initialized=None returns satochip_recover_setup (factory-fresh card needs setup)."""
         p = self._mk_plugin()
-        di = SimpleNamespace(initialized=None)
-        self.assertEqual("satochip_unlock", p.wizard_entry_for_device(di, new_wallet=False))
+        di = SimpleNamespace(initialized=None, label="")
+        self.assertEqual("satochip_recover_setup", p.wizard_entry_for_device(di, new_wallet=False))
 
 
 class TestSignMessageEdgeCases(ElectrumTestCase):
@@ -934,7 +1019,8 @@ class TestSignTransactionEdgeCases(ElectrumTestCase):
 class TestSetupDeviceBranches(ElectrumTestCase):
     """_setup_device() error branches."""
 
-    def _mk_plugin_with_client(self, *, card_setup_return=None, card_setup_exc=None, card_type="Satochip"):
+    def _mk_plugin_with_client(self, *, card_setup_return=None, card_setup_exc=None, card_type="Satochip",
+                               card_get_status_return=None, card_get_status_exc=None):
         p = object.__new__(satochip.SatochipPlugin)
         p.device = "Satochip"
         cc = MagicMock()
@@ -944,6 +1030,15 @@ class TestSetupDeviceBranches(ElectrumTestCase):
             cc.card_setup.side_effect = card_setup_exc
         else:
             cc.card_setup.return_value = card_setup_return or ([], 0x90, 0x00)
+        # Default card_get_status: card not yet set up (setup_done=False, is_seeded=False)
+        if card_get_status_exc:
+            cc.card_get_status.side_effect = card_get_status_exc
+        else:
+            cc.card_get_status.return_value = (
+                [], 0x90, 0x00,
+                card_get_status_return if card_get_status_return is not None
+                else {'setup_done': False, 'is_seeded': False}
+            )
         handler = MagicMock()
         client = SimpleNamespace(cc=cc, handler=handler, verify_PIN=MagicMock())
         devmgr = MagicMock()
@@ -970,25 +1065,64 @@ class TestSetupDeviceBranches(ElectrumTestCase):
         self.assertIn("disconnected", str(ctx.exception))
 
     def test_setup_already_done(self):
-        """card_setup returning 0x9C07 shows error."""
+        """card_setup returning 0x9C07 shows error and returns early (no verify_PIN)."""
         p, client, handler = self._mk_plugin_with_client(card_setup_return=([], 0x9C, 0x07))
         p._setup_device("1234", "dev1", handler)
         handler.show_error.assert_called_once()
-        self.assertIn("already done", handler.show_error.call_args[0][0])
+        self.assertIn("already initialized", handler.show_error.call_args[0][0])
+        client.verify_PIN.assert_not_called()
 
     def test_setup_generic_failure(self):
-        """card_setup returning unexpected SW shows error."""
+        """card_setup returning unexpected SW shows error and returns early (no verify_PIN)."""
         p, client, handler = self._mk_plugin_with_client(card_setup_return=([], 0x6F, 0x00))
         p._setup_device("1234", "dev1", handler)
         handler.show_error.assert_called_once()
-        self.assertIn("unable to set up", handler.show_error.call_args[0][0])
+        self.assertIn("Failed to set up card", handler.show_error.call_args[0][0])
+        client.verify_PIN.assert_not_called()
 
     def test_setup_exception(self):
-        """Exception during card_setup shows error."""
+        """Exception during card_setup shows error and returns early (no verify_PIN)."""
         p, client, handler = self._mk_plugin_with_client(card_setup_exc=RuntimeError("hw fail"))
         p._setup_device("1234", "dev1", handler)
         handler.show_error.assert_called_once()
         self.assertIn("hw fail", handler.show_error.call_args[0][0])
+        client.verify_PIN.assert_not_called()
+
+    def test_setup_precheck_already_seeded_raises(self):
+        """Pre-check: card_get_status reports setup_done=True, is_seeded=True raises UserFacingException."""
+        p, client, handler = self._mk_plugin_with_client(
+            card_get_status_return={'setup_done': True, 'is_seeded': True}
+        )
+        with self.assertRaises(UserFacingException) as ctx:
+            p._setup_device("1234", "dev1", handler)
+        self.assertIn("already fully initialized", str(ctx.exception))
+        client.cc.card_setup.assert_not_called()
+
+    def test_setup_precheck_setup_no_seed_raises(self):
+        """Pre-check: card_get_status reports setup_done=True, is_seeded=False raises UserFacingException."""
+        p, client, handler = self._mk_plugin_with_client(
+            card_get_status_return={'setup_done': True, 'is_seeded': False}
+        )
+        with self.assertRaises(UserFacingException) as ctx:
+            p._setup_device("1234", "dev1", handler)
+        self.assertIn("already has a PIN", str(ctx.exception))
+        client.cc.card_setup.assert_not_called()
+
+    def test_setup_precheck_communication_error_raises(self):
+        """Pre-check: card_get_status raises an exception re-raises as UserFacingException."""
+        p, client, handler = self._mk_plugin_with_client(
+            card_get_status_exc=RuntimeError("pyscard comm failure")
+        )
+        with self.assertRaises(UserFacingException) as ctx:
+            p._setup_device("1234", "dev1", handler)
+        self.assertIn("Cannot communicate with the card", str(ctx.exception))
+        client.cc.card_setup.assert_not_called()
+
+    def test_setup_success_calls_verify_pin(self):
+        """Successful setup proceeds to verify_PIN."""
+        p, client, handler = self._mk_plugin_with_client(card_setup_return=([], 0x90, 0x00))
+        p._setup_device("1234", "dev1", handler)
+        client.verify_PIN.assert_called_once()
 
 
 class TestImportSeedBranches(ElectrumTestCase):
@@ -1105,6 +1239,7 @@ class TestExtendWizardNavmap(ElectrumTestCase):
             'satochip_start', 'satochip_xpub', 'satochip_not_setup',
             'satochip_do_setup', 'satochip_not_seeded', 'satochip_import_seed',
             'satochip_success_seed', 'satochip_unlock', 'satochip_generate_seed',
+            'satochip_recover_seed', 'satochip_wrong_card', 'satochip_recover_setup',
         }
         self.assertEqual(expected_keys, set(captured.keys()))
 

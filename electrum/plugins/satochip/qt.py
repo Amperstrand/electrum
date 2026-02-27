@@ -33,6 +33,7 @@ from .satochip import SatochipPlugin
 from pysatochip.CardConnector import UnexpectedSW12Error, CardError, CardNotPresentError, WrongPinError
 from pysatochip.Satochip2FA import Satochip2FA, SERVER_LIST
 from pysatochip.version import SATOCHIP_PROTOCOL_MAJOR_VERSION, SATOCHIP_PROTOCOL_MINOR_VERSION
+from .logging_utils import instrument_module_function_entries
 
 _logger = get_logger(__name__)
 
@@ -230,9 +231,315 @@ class Plugin(SatochipPlugin, QtPluginBase):
             'satochip_success_seed': {
                 'gui': WCSeedSuccess,
             },
-            'satochip_unlock': {'gui': WCHWUnlock}
+            'satochip_unlock': {'gui': WCSatochipUnlock},
+            'satochip_blocked': {
+                'gui': WCSatochipBlocked,
+                'next': 'choose_hardware_device',  # After reset, go back to device selection to rescan
+            },
+            'satochip_wrong_card': {
+                'gui': WCSatochipWrongCard,
+                'next': 'choose_hardware_device',  # Go back to device selection
+            },
+            # Seed recovery for existing wallets
+            'satochip_recover_setup': {
+                'gui': WCSatochipRecoverSetup,
+                'next': 'satochip_recover_seed',
+            },
+            'satochip_recover_seed': {
+                'gui': WCSatochipRecoverSeed,
+                'next': 'satochip_unlock',  # After seed import, unlock wallet
+            },
         }
         wizard.navmap_merge(views)
+
+
+class WCSatochipBlocked(WalletWizardComponent):
+    """Wizard page shown when the selected Satochip is blocked (PIN tries exhausted).
+    Offers a Factory Reset button.  Reset runs automatically with card presence detection
+    — no manual OK clicks between steps.
+    """
+    statusUpdated = pyqtSignal(str)
+
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(
+            self, parent, wizard, title=_('Satochip blocked'))
+        self._busy = False
+        self._reset_done = False
+        self.statusUpdated.connect(self._on_status_updated)
+
+    def _on_status_updated(self, text):
+        self.status_label.setText(text)
+
+    def on_ready(self):
+        _name, _info = self.wizard_data['hardware_device']
+        self.plugin = self.wizard.plugins.get_plugin(_info.plugin_name)
+        device_id = _info.device.id_
+        self.device_id = device_id
+
+        msg = WWLabel(''.join([
+            _("Your Satochip is blocked due to too many failed PIN attempts.\n\n"),
+            _("The only recovery is a factory reset, which will:\n"),
+            _("  • Erase all data from the card\n"),
+            _("  • Delete your wallet seed from the card\n"),
+            _("  • Return the card to factory state\n\n"),
+            _("⚠️  Ensure you have a seed backup before proceeding!\n\n"),
+            _("Click below to start the reset. Remove and reinsert the card when "
+              "prompted — detection is automatic."),
+        ]))
+        msg.setWordWrap(True)
+        self.layout().addWidget(msg)
+
+        self.reset_btn = EnterButton(_("Factory Reset"), self._on_factory_reset)
+        self.layout().addWidget(self.reset_btn)
+        self.layout().addStretch(1)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        self.layout().addWidget(self.status_label)
+
+    def _on_factory_reset(self):
+        if self._busy:
+            return
+        self._busy = True
+        self.reset_btn.setEnabled(False)
+        self.statusUpdated.emit(_("Starting factory reset..."))
+
+        # create_handler() must be called from the GUI thread (QtHandlerBase assertion).
+        handler = self.plugin.create_handler(self.wizard)
+        devmgr = self.plugin.device_manager()
+        client = devmgr.client_by_id(self.device_id, scan_now=False)
+        if not client:
+            self.statusUpdated.emit(_("Device not found. Please rescan."))
+            self._busy = False
+            self.reset_btn.setEnabled(True)
+            return
+        client.handler = handler
+
+        def do_reset():
+            try:
+                client.perform_factory_reset()
+                self._reset_done = True
+                self.statusUpdated.emit(_(
+                    "Factory reset complete! Click Next to rescan devices, "
+                    "then select your Satochip again to set it up."))
+                self.valid = True
+            except Exception as e:
+                self.statusUpdated.emit(_("Reset failed: {}").format(str(e)))
+                _logger.exception("Factory reset failed")
+            finally:
+                self._busy = False
+                self.reset_btn.setEnabled(True)
+
+        t = threading.Thread(target=do_reset, daemon=True)
+        t.start()
+
+    def apply(self):
+        pass
+
+
+class WCSatochipWrongCard(WalletWizardComponent):
+    """Wizard page shown when the selected Satochip cannot be used with the wallet.
+    
+    This happens when:
+    - Card is factory-fresh (no PIN set) and user tries to open existing wallet
+    - Card has PIN but no seed and user tries to open existing wallet
+    
+    The card MUST be seeded to work with an existing wallet.
+    """
+    
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(
+            self, parent, wizard, title=_('Wrong Satochip'))
+        self._busy = False
+
+    def on_ready(self):
+        _name, _info = self.wizard_data['hardware_device']
+        device_label = _info.label if _info else 'Unknown'
+        
+        msg = WWLabel(''.join([
+            _("This Satochip cannot be used with this wallet.\n\n"),
+            _("The card ({}) does not contain the seed that was used to create this wallet.\n\n").format(device_label),
+            _("To use a Satochip with an existing wallet, the card must already have "
+              "the SAME seed that created the wallet.\n\n"),
+            _("Options:\n"),
+            _("  • Use a different Satochip that contains the wallet's seed\n"),
+            _("  • Use Satochip-Utils to import the correct seed onto this card\n"),
+            _("  • Create a new wallet with this card instead\n\n"),
+            _("Click 'Back' to choose a different device."),
+        ]))
+        msg.setWordWrap(True)
+        self.layout().addWidget(msg)
+        self.layout().addStretch(1)
+        self.valid = True
+
+    def apply(self):
+        pass
+
+
+class WCSatochipRecoverSetup(WalletWizardComponent):
+    """Wizard page for setting up PIN on a factory-fresh Satochip for existing wallet recovery.
+    
+    This happens when:
+    - Card is factory-fresh (no PIN set) and user tries to open existing wallet
+    
+    User must set a PIN on the card, then proceed to seed recovery.
+    """
+    
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(
+            self, parent, wizard, title=_('Set Up Satochip for Existing Wallet'))
+        self._busy = False
+        self.plugins = wizard.plugins
+        self.plugin = self.plugins.get_plugin('satochip')
+
+    def on_ready(self):
+        _name, _info = self.wizard_data['hardware_device']
+        device_label = _info.label if _info else 'Unknown'
+        
+        # Explanation message
+        msg = WWLabel(''.join([
+            _("This Satochip ({}) is not yet initialized.\n\n").format(device_label),
+            _("To use this card with your existing wallet, you must first set a PIN, "
+              "then import the seed phrase that was used to create this wallet.\n\n"),
+            _("Enter a new PIN for this card below (4-16 characters).\n"),
+        ]))
+        msg.setWordWrap(True)
+        self.layout().addWidget(msg)
+        
+        # PIN input
+        self.pw = PasswordLineEdit()
+        self.pw.setMinimumWidth(32)
+        self.layout().addWidget(WWLabel(_("Enter new PIN:")))
+        self.layout().addWidget(self.pw)
+        
+        self.pw2 = PasswordLineEdit()
+        self.pw2.setMinimumWidth(32)
+        self.layout().addWidget(WWLabel(_("Confirm new PIN:")))
+        self.layout().addWidget(self.pw2)
+        
+        self.layout().addStretch(1)
+        
+        # PIN validation
+        def validate():
+            is_valid = True
+            if self.pw.text() != self.pw2.text():
+                is_valid = False
+            pw_bytes = self.pw.text().encode("utf-8")
+            if len(pw_bytes) < 4 or len(pw_bytes) > 16:
+                is_valid = False
+            pw2_bytes = self.pw2.text().encode("utf-8")
+            if len(pw2_bytes) < 4 or len(pw2_bytes) > 16:
+                is_valid = False
+            self.valid = is_valid
+        
+        self.pw2.textChanged.connect(validate)
+        self.pw.textChanged.connect(validate)
+
+    def apply(self):
+        # Set up the card with the PIN
+        pin = self.pw.text()
+        _name, _info = self.wizard_data['hardware_device']
+        device_id = _info.device.id_
+        
+        client = self.plugins.device_manager.client_by_id(device_id, scan_now=False)
+        client.handler = self.plugin.create_handler(self.wizard)
+        
+        try:
+            self.plugin._setup_device(pin, device_id, client)
+            _logger.info('[WCSatochipRecoverSetup] Card setup completed')
+            self.valid = True
+        except Exception as e:
+            _logger.exception('[WCSatochipRecoverSetup] Failed to set up card')
+            self.error = str(e)
+            self.valid = False
+
+
+class WCSatochipRecoverSeed(WalletWizardComponent):
+    """Wizard page for recovering an existing wallet by importing the seed onto an unseeded Satochip.
+    
+    This happens when:
+    - Card has PIN set but no seed and user tries to open existing wallet
+    
+    User must enter the seed phrase that matches the wallet, which will be imported onto the card.
+    """
+    
+    def __init__(self, parent, wizard):
+        WalletWizardComponent.__init__(
+            self, parent, wizard, title=_('Import Seed for Existing Wallet'))
+        self._busy = False
+        self._seed_widget = None
+        self.plugins = wizard.plugins
+        self.plugin = self.plugins.get_plugin('satochip')
+
+    def on_ready(self):
+        _name, _info = self.wizard_data['hardware_device']
+        device_label = _info.label if _info else 'Unknown'
+        
+        # Explanation message
+        msg = WWLabel(''.join([
+            _("This Satochip ({}) is not yet seeded.\n\n").format(device_label),
+            _("To use this card with your existing wallet, you must import the seed phrase "
+              "that was used to create this wallet.\n\n"),
+            _("Enter your BIP39 seed phrase below. It must be the SAME seed that was used "
+              "to create this wallet.\n\n"),
+            _("⚠️ If you enter the wrong seed, the wallet will not open correctly.\n"),
+        ]))
+        msg.setWordWrap(True)
+        self.layout().addWidget(msg)
+        
+        # Seed input widget - only allow BIP39
+        self._seed_widget = SeedWidget(
+            is_seed=self._is_valid_bip39_seed,
+            options=['ext', 'bip39'],  # Only BIP39 with optional passphrase
+            config=self.wizard.config,
+        )
+        
+        def seed_valid_changed(valid):
+            self.valid = valid
+            
+        self._seed_widget.validChanged.connect(seed_valid_changed)
+        self.layout().addWidget(self._seed_widget)
+        self.layout().addStretch(1)
+
+    def _is_valid_bip39_seed(self, text: str) -> bool:
+        """Check if text is a valid BIP39 seed."""
+        from electrum.keystore import bip39_is_checksum_valid
+        is_checksum_valid, is_wordlist_valid = bip39_is_checksum_valid(text)
+        return is_checksum_valid and is_wordlist_valid
+
+    def apply(self):
+        if not self._seed_widget:
+            return
+        
+        seed = self._seed_widget.get_seed()
+        # Note: Passphrase support not included in this recovery flow.
+        # Users with passphrase-protected seeds should use Satochip-Utils.
+        passphrase = ''
+        
+        # Store in wizard_data for use by the unlock step
+        cosigner_data = self.wizard.current_cosigner(self.wizard_data)
+        cosigner_data['seed'] = seed
+        cosigner_data['seed_variant'] = 'bip39'
+        cosigner_data['seed_type'] = 'bip39'
+        cosigner_data['seed_extend'] = bool(passphrase)
+        cosigner_data['seed_extra_words'] = passphrase
+        
+        # Import seed onto the card
+        _name, _info = self.wizard_data['hardware_device']
+        device_id = _info.device.id_
+        
+        settings = ('bip39', seed, passphrase)
+        handler = self.plugin.create_handler(self.wizard)
+        
+        try:
+            self.plugin._import_seed(settings, device_id, handler)
+            _logger.info('[WCSatochipRecoverSeed] Seed imported successfully')
+            # Now set up to proceed to unlock
+            self.valid = True
+        except Exception as e:
+            _logger.exception('[WCSatochipRecoverSeed] Failed to import seed')
+            self.error = str(e)
+            self.valid = False
 
 
 class Satochip_Handler(QtHandlerBase):
@@ -240,8 +547,88 @@ class Satochip_Handler(QtHandlerBase):
     def __init__(self, win):
         super(Satochip_Handler, self).__init__(win, 'Satochip')
 
+    def message_dialog(self, msg, on_cancel=None):
+        """
+        Override the base handler message dialog to include an explicit OK button.
 
-class SatochipSettingsDialog(WindowModalDialog):
+        The default hardware handler shows a window without buttons that can only
+        be dismissed via ESC/close. For Satochip we want a clearer UX so users
+        can dismiss informational messages (like factory-reset success) with
+        Enter or by clicking OK.
+        """
+        # Close any previous dialog managed by this handler.
+        self.clear_dialog()
+
+        title = self.MESSAGE_DIALOG_TITLE
+        if title is None:
+            title = _('Satochip')
+
+        parent = self.top_level_window()
+        self.dialog = dialog = WindowModalDialog(parent, title)
+
+        label = QLabel(msg)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        vbox = QVBoxLayout(dialog)
+        vbox.addWidget(label)
+
+        buttons = []
+        if on_cancel is not None:
+            dialog.rejected.connect(on_cancel)
+            buttons.append(CancelButton(dialog))
+        # Add an OK button and make it the default so Enter works.
+        buttons.append(OkButton(dialog))
+        vbox.addLayout(Buttons(*buttons))
+
+        dialog.show()
+
+class WCSatochipUnlock(WCHWUnlock):
+    """Satochip-specific unlock page.
+    
+    Provides clean str(e) error messages instead of repr(e), and emits
+    a Qt signal to navigate to satochip_wrong_card when an authentikey
+    mismatch (wrong card) is detected.
+    """
+    _navigate_to = pyqtSignal(str)  # page key to navigate to
+
+    def __init__(self, parent, wizard):
+        super().__init__(parent, wizard)
+        self._navigate_to.connect(self._do_navigate)
+
+    def _do_navigate(self, view_key):
+        """Navigate to a named page. Must run on GUI thread (connected via signal)."""
+        self.wizard.load_next_component(view_key, self.wizard_data)
+
+    def on_ready(self):
+        _name, _info = self.wizard_data['hardware_device']
+        device_id = _info.device.id_
+        client = self.plugins.device_manager.client_by_id(device_id, scan_now=False)
+        if client is None:
+            self.error = _('The device was disconnected.')
+            self.busy = False
+            self.validate()
+            return
+        client.handler = self.plugin.create_handler(self.wizard)
+
+        def unlock_task(client):
+            try:
+                self.password = client.get_password_for_storage_encryption()
+            except UserFacingException as e:
+                msg = str(e)
+                if 'wrong satochip' in msg.lower() or 'does not match' in msg.lower():
+                    self.busy = False
+                    self._navigate_to.emit('satochip_wrong_card')
+                    return
+                self.error = msg
+            except Exception as e:
+                self.error = str(e)
+                self.logger.exception(str(e))
+            self.busy = False
+            self.validate()
+
+        t = threading.Thread(target=unlock_task, args=(client,), daemon=True)
+        t.start()
+
     """Tabbed settings dialog for Satochip device.
     
     Tab 1 - Information: Device status, versions, card info
@@ -1112,8 +1499,8 @@ class WCSatochipSetup(WalletWizardComponent):
                 self.wizard.requestNext.emit()  # triggers Next GUI thread from event loop
             except Exception as e:
                 self.valid = False
-                self.error = repr(e)
-                _logger.exception(repr(e))
+                self.error = str(e)
+                _logger.exception(str(e))
             finally:
                 self.busy = False
 
@@ -1306,8 +1693,8 @@ class WCSatochipImportSeed(WalletWizardComponent):
                 self.wizard.requestNext.emit()  # triggers Next GUI thread from event loop
             except Exception as e:
                 self.valid = False
-                self.error = repr(e)
-                _logger.exception(repr(e))
+                self.error = str(e)
+                _logger.exception(str(e))
             finally:
                 self.busy = False
 
@@ -1319,3 +1706,6 @@ class WCSatochipImportSeed(WalletWizardComponent):
 
     def apply(self):
         pass
+
+
+instrument_module_function_entries(_logger, globals(), __name__)

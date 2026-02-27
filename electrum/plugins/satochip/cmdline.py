@@ -14,6 +14,7 @@ from electrum.logging import get_logger
 from electrum.hw_wallet.cmdline import CmdLineHandler
 
 from .satochip import SatochipPlugin
+from .logging_utils import instrument_module_function_entries
 
 
 _logger = get_logger(__name__)
@@ -49,6 +50,9 @@ class Plugin(SatochipPlugin):
     def create_handler(self, window):
         """Return CLI handler (no window available in CLI mode)."""
         return self.handler
+
+
+instrument_module_function_entries(_logger, globals(), __name__)
 
 
 # EOF
