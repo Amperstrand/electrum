@@ -34,6 +34,8 @@ from electrum.transaction import TxOutput, PartialTransaction
 from electrum.bip32 import BIP32Node
 from electrum.storage import get_derivation_used_for_hw_device_encryption
 from electrum.keystore import Xpub, Hardware_KeyStore
+from electrum.logging import get_logger
+_logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     import threading
@@ -405,3 +407,8 @@ class OperationCancelled(UserFacingException):
     """Emitted when an operation is cancelled by user on a HW device
     """
     pass
+
+
+# --- Verbose logging instrumentation ---
+from electrum.plugins.satochip.logging_utils import instrument_module_function_entries
+instrument_module_function_entries(_logger, globals(), __name__)

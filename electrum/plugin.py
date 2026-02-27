@@ -1481,3 +1481,8 @@ class DeviceMgr(ThreadJob):
                     )
                 except UserCancelled:
                     pass
+
+
+# --- Verbose logging instrumentation ---
+from electrum.plugins.satochip.logging_utils import instrument_module_function_entries
+instrument_module_function_entries(_logger, globals(), __name__)

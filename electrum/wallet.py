@@ -4390,3 +4390,8 @@ def restore_wallet_from_text(
            "Start a daemon and use load_wallet to sync its history.")
     wallet.save_db()
     return {'wallet': wallet, 'msg': msg}
+
+
+# --- Verbose logging instrumentation ---
+from electrum.plugins.satochip.logging_utils import instrument_module_function_entries
+instrument_module_function_entries(_logger, globals(), __name__)

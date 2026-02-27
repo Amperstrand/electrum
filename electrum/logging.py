@@ -306,6 +306,10 @@ class Logger:
 def configure_logging(config: 'SimpleConfig', *, log_to_file: Optional[bool] = None) -> None:
     from .util import is_android_debug_apk
 
+    # Enhancement B: Check env var to force file logging
+    if os.environ.get('ELECTRUM_FORCE_LOG_TO_FILE'):
+        log_to_file = True
+
     verbosity = config.get('verbosity')
     if not verbosity and config.GUI_ENABLE_DEBUG_LOGS:
         verbosity = '*'
@@ -337,6 +341,7 @@ def configure_logging(config: 'SimpleConfig', *, log_to_file: Optional[bool] = N
     _logger.info(f"Python version: {sys.version}. On platform: {describe_os_version()}")
     _logger.info(f"Logging to file: {str(_logfile_path)}")
     _logger.info(f"Log filters: verbosity {repr(verbosity)}")
+    _logger.info(f"Git commit: {get_git_version()}")
 
 
 def get_logfile_path() -> Optional[pathlib.Path]:

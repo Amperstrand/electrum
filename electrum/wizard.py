@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from electrum.keystore import Hardware_KeyStore
     from electrum.simple_config import SimpleConfig
 
+_logger = get_logger(__name__)
 
 class WizardViewState(NamedTuple):
     view: Optional[str]
@@ -909,4 +910,9 @@ class TermsOfUseWizard(AbstractWizard):
             self._current = WizardViewState(start_view, {}, params)
         else:
             self._current = start_viewstate
-        return self._current
+            return self._current
+
+
+# --- Verbose logging instrumentation ---
+from electrum.plugins.satochip.logging_utils import instrument_module_function_entries
+instrument_module_function_entries(_logger, globals(), __name__)

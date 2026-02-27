@@ -32,9 +32,10 @@ from PyQt6.QtCore import QObject, pyqtSignal, Qt
 from PyQt6.QtWidgets import QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QMenu
 
 from electrum.i18n import _
-from electrum.logging import Logger
+from electrum.logging import Logger, get_logger
 from electrum.util import UserCancelled, UserFacingException, ChoiceItem
 from electrum.plugin import hook
+_logger = get_logger(__name__)
 
 from electrum.gui.common_qt.util import TaskThread
 from electrum.gui.qt.password_dialog import PasswordLayout, PW_PASSPHRASE
@@ -319,3 +320,8 @@ class QtPluginBase(object):
 
                 device_name = "{} ({})".format(self.device, keystore.label)
                 menu.addAction(read_QIcon("eye1.png"), _("Show address on {}").format(device_name), show_address)
+
+
+# --- Verbose logging instrumentation ---
+from electrum.plugins.satochip.logging_utils import instrument_module_function_entries
+instrument_module_function_entries(_logger, globals(), __name__)

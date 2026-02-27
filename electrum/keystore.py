@@ -51,8 +51,9 @@ from .util import (InvalidPassword, WalletFileException,
                    BitcoinException, bfh, inv_dict, is_hex_str)
 from .mnemonic import Mnemonic, Wordlist, calc_seed_type, is_seed
 from .plugin import run_hook
-from .logging import Logger
+from .logging import Logger, get_logger
 from .lrucache import LRUCache
+_logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from .gui.common_qt.util import TaskThread
@@ -1247,3 +1248,8 @@ def from_master_key(text: str) -> Union[BIP32_KeyStore, Old_KeyStore]:
     else:
         raise BitcoinException('Invalid master key')
     return k
+
+
+# --- Verbose logging instrumentation ---
+from electrum.plugins.satochip.logging_utils import instrument_module_function_entries
+instrument_module_function_entries(_logger, globals(), __name__)
