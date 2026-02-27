@@ -229,8 +229,23 @@ class TestStory0FactoryReset:
             events,
         )
 
-        _status("Verifying card is factory-reset...", "04_verify_blank")
-        if not wait_for_card_present(cc_session, timeout=30, app=app):
+        _status("Remove card for final verification...", "03_verify_remove")
+        if not wait_for_card_absent(cc_session, timeout=60, app=app):
+            _cascade_skip["story_0"] = "FAILED: timed out waiting for card removal before verification"
+            _status("FAILED: card was not removed", "03_failed_verify_remove")
+            record_event(
+                {
+                    "event": "factory_reset_verification",
+                    "status": "failed",
+                    "error": "Timed out waiting for card removal before final verification",
+                },
+                artifacts.log_path,
+                events,
+            )
+            pytest.fail("Timed out waiting for card removal before final verification")
+
+        _status("Reinsert card for status check...", "03_verify_reinsert")
+        if not wait_for_card_present(cc_session, timeout=60, app=app):
             _cascade_skip["story_0"] = "FAILED: timed out waiting for card reconnection"
             _status("FAILED: card did not reconnect", "03_failed_reconnect")
             record_event(
@@ -245,6 +260,8 @@ class TestStory0FactoryReset:
             pytest.fail("Timed out waiting for card reconnection after APDU reset")
 
         time.sleep(2.0)
+
+        _status("Verifying card is factory-reset...", "04_verify_blank")
         try:
             (_, sw1, sw2, status_dict) = cc_session.card_get_status()
         except Exception:
