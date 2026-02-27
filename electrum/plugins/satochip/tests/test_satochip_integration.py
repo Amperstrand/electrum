@@ -44,6 +44,7 @@ Phase 3 card-state prerequisites (tests enforce these with skips):
 
 import pytest
 import os
+import json
 from unittest.mock import patch, MagicMock, ANY
 from types import SimpleNamespace
 
@@ -1616,6 +1617,545 @@ class TestPINManagement:
         print("=============================")
         assert (sw1, sw2) == (0x90, 0x00)
 
+
+@pytest.mark.integration
+@pytest.mark.requires_card
+@pytest.mark.manual
+@pytest.mark.destructive_card
+class TestPinBlockWorkflow:
+    """
+    User Story: 'User enters wrong PIN N times → card blocks → recovery via PUK.'
+
+    ⚠️  SAFETY: This test will BLOCK the card and attempt PUK recovery using TESTPUK.
+    The card MUST have been initialized by this test suite (TestCardInitialization or
+    TestWalletSetupAndSign) so that TESTPUK matches the PUK stored on the card.
+    If the card was set up via the Electrum GUI, the PUK is random and unknown —
+    PUK recovery will fail and the card will be permanently bricked.
+
+    Pre-flight: The test checks PUK0_remaining_tries > 0 before proceeding.
+    """
+
+    def test_wrong_pin_until_block_and_recover(self, cc_live, tmp_path):
+        _require_card_state(cc_live, requires_setup=True)
+
+        # PUK pre-flight safety check: ensure recovery is possible
+        (_, _, _, d_preflight) = cc_live.card_get_status()
+        puk_tries = d_preflight.get("PUK0_remaining_tries")
+        if puk_tries is not None and puk_tries == 0:
+            pytest.skip(
+                "PUK0_remaining_tries=0 — card PUK is already exhausted. "
+                "The card is permanently locked. Factory-reset required."
+            )
+
+        artifact_dir = tmp_path / "pin_block_workflow"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        log_path = artifact_dir / "pin_block_workflow.jsonl"
+
+        observe_gui = os.environ.get("SATOCHIP_OBSERVE_GUI", "0") == "1"
+        widget = None
+        status_label = None
+        app = None
+
+        if observe_gui:
+            try:
+                from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel
+                app = QApplication.instance() or QApplication([])
+                widget = QWidget()
+                widget.setWindowTitle("Satochip PIN Block Workflow")
+                layout = QVBoxLayout(widget)
+                status_label = QLabel("Starting PIN block workflow...")
+                layout.addWidget(status_label)
+                widget.resize(700, 120)
+                widget.show()
+                app.processEvents()
+            except Exception as exc:
+                print(f"[pin-block] GUI observe disabled (PyQt6 unavailable): {exc}")
+                observe_gui = False
+
+        def _set_status(text: str, shot_name: str = None):
+            print(f"[pin-block] {text}")
+            if observe_gui and status_label is not None:
+                status_label.setText(text)
+                app.processEvents()
+                if shot_name:
+                    (artifact_dir / "screenshots").mkdir(parents=True, exist_ok=True)
+                    shot_path = artifact_dir / "screenshots" / f"{shot_name}.png"
+                    widget.grab().save(str(shot_path))
+
+        events = []
+
+        def _record(event: dict):
+            events.append(event)
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, sort_keys=True) + "\n")
+
+        (_, _, _, status_before) = cc_live.card_get_status()
+        tries_before = status_before.get("PIN0_remaining_tries")
+        if tries_before == 0:
+            _set_status("Card already blocked at start. Attempting PUK recovery...", "step00_start_blocked")
+            cc_live.card_unblock_PIN(0, list(TESTPUK))
+
+        _, sw1, sw2 = cc_live.card_verify_PIN_simple(TESTPIN)
+        assert (sw1, sw2) == (0x90, 0x00), (
+            f"Expected TESTPIN to succeed before destructive loop, got SW=0x{sw1:02x}{sw2:02x}"
+        )
+        (_, _, _, status0) = cc_live.card_get_status()
+        max_tries = status0.get("PIN0_remaining_tries")
+        assert isinstance(max_tries, int) and max_tries >= 1, (
+            f"Could not determine PIN0_remaining_tries from card status: {status0}"
+        )
+
+        wrong_pin = b"000000" if TESTPIN != b"000000" else b"111111"
+        _set_status(f"Starting wrong PIN attempts (max_tries={max_tries})", "step01_start")
+
+        for attempt in range(1, max_tries + 1):
+            try:
+                cc_live.card_verify_PIN_simple(wrong_pin)
+                pytest.fail(f"Attempt {attempt}: expected wrong-PIN error, call succeeded")
+            except Exception as exc:
+                exc_type = type(exc).__name__
+                (_, _, _, d_after) = cc_live.card_get_status()
+                tries_after = d_after.get("PIN0_remaining_tries")
+                event = {
+                    "event": "wrong_pin_attempt",
+                    "attempt": attempt,
+                    "exception_type": exc_type,
+                    "exception": str(exc),
+                    "tries_remaining": tries_after,
+                }
+                _record(event)
+                _set_status(
+                    f"Attempt {attempt}/{max_tries}: {exc_type}, tries_remaining={tries_after}",
+                    f"step_attempt_{attempt:02d}",
+                )
+
+                if attempt < max_tries:
+                    assert "WrongPin" in exc_type or "wrong" in str(exc).lower(), (
+                        f"Attempt {attempt} expected WrongPinError, got {exc_type}: {exc}"
+                    )
+
+        try:
+            cc_live.card_verify_PIN_simple(wrong_pin)
+            pytest.fail("Expected blocked PIN after exhausting tries, but call succeeded")
+        except Exception as exc:
+            exc_type = type(exc).__name__
+            (_, _, _, d_blocked) = cc_live.card_get_status()
+            tries_blocked = d_blocked.get("PIN0_remaining_tries")
+            _record({
+                "event": "post_exhaustion_attempt",
+                "exception_type": exc_type,
+                "exception": str(exc),
+                "tries_remaining": tries_blocked,
+            })
+            _set_status(
+                f"Post-exhaustion attempt: {exc_type}, tries_remaining={tries_blocked}",
+                "step_blocked",
+            )
+            assert ("PinBlocked" in exc_type) or tries_blocked == 0, (
+                f"Expected blocked card after exhausting tries, got {exc_type}, status={d_blocked}"
+            )
+
+        _set_status("Attempting PUK unblock recovery...", "step_recover_start")
+        cc_live.card_unblock_PIN(0, list(TESTPUK))
+        _, sw1, sw2 = cc_live.card_verify_PIN_simple(TESTPIN)
+        assert (sw1, sw2) == (0x90, 0x00), (
+            f"Card did not recover after PUK unblock, TESTPIN verify failed SW=0x{sw1:02x}{sw2:02x}"
+        )
+        (_, _, _, status_final) = cc_live.card_get_status()
+        _record({
+            "event": "recovery",
+            "status": "ok",
+            "pin_tries_remaining": status_final.get("PIN0_remaining_tries"),
+            "puk_tries_remaining": status_final.get("PUK0_remaining_tries"),
+            "artifact_dir": str(artifact_dir),
+        })
+        _set_status("Recovery successful. Workflow complete.", "step_recover_done")
+
+        if observe_gui and app is not None:
+            app.processEvents()
+
+
+# =============================================================================
+# User Story: New Wallet Setup & Message Signing (full lifecycle)
+# =============================================================================
+
+# Custom test mnemonic — NEVER use with real funds.
+HUNGRY_MNEMONIC = (
+    "hungry type amount worth cloth breeze "
+    "capable absent more wear manual audit"
+)
+
+
+@pytest.mark.integration
+@pytest.mark.requires_card
+@pytest.mark.destructive_card
+class TestWalletSetupAndSign:
+    """
+    User Story: 'New user sets up a fresh card, creates a wallet from a known
+    mnemonic, and signs a message to prove the key is functional.'
+
+    This test exercises the COMPLETE happy path:
+      1. card_setup() — initialise a blank card with TESTPIN / TESTPUK
+      2. card_bip32_import_seed() — import the HUNGRY_MNEMONIC as a BIP39 seed
+      3. card_bip32_get_extendedkey() — derive xpubs and cross-check with software
+      4. card_sign_message() — sign a message and verify the compact 65-byte sig
+
+    Artifacts captured:
+      - JSONL event log  (wallet_setup_and_sign.jsonl)
+      - GUI screenshots  (if SATOCHIP_OBSERVE_GUI=1)
+
+    Card state before:  factory-reset (setup_done=False)
+    Card state after:   setup_done=True, is_seeded=True
+
+    Prerequisites:
+      - Card must be freshly factory-reset (blank)
+      - Remote pcscd SSH tunnel active
+      - --allow-destructive-card-tests flag
+
+    ⚠️  Test card only — NEVER use HUNGRY_MNEMONIC with real funds.
+    """
+
+    @staticmethod
+    def _masterseed() -> bytes:
+        """Return the 64-byte BIP39 masterseed for HUNGRY_MNEMONIC."""
+        from electrum.keystore import bip39_to_seed
+        return bip39_to_seed(HUNGRY_MNEMONIC, passphrase="")
+
+    def test_wallet_setup_and_sign_message(self, cc_live, tmp_path):
+        """
+        Full lifecycle test: blank card → setup → seed → derive → sign → verify.
+
+        A single test method so the entire flow is captured as one artifact set
+        with a coherent JSONL log and sequential screenshots.
+        """
+        import time
+        import hashlib
+        from electrum.keystore import bip39_to_seed
+        from electrum.bip32 import BIP32Node
+        from electrum.plugins.satochip.satochip import bip32path2bytes
+
+        # -- Artifact directory ------------------------------------------------
+        artifact_dir = tmp_path / "wallet_setup_and_sign"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        log_path = artifact_dir / "wallet_setup_and_sign.jsonl"
+
+        # -- Optional GUI observer -------------------------------------------
+        observe_gui = os.environ.get("SATOCHIP_OBSERVE_GUI", "0") == "1"
+        widget = None
+        status_label = None
+        app = None
+
+        if observe_gui:
+            try:
+                from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel
+                from PyQt6.QtCore import Qt
+                app = QApplication.instance() or QApplication([])
+                widget = QWidget()
+                widget.setWindowTitle("Satochip Wallet Setup & Sign")
+                widget.setStyleSheet("background-color: #1a1a2e; color: #e0e0e0;")
+                layout = QVBoxLayout(widget)
+                status_label = QLabel("Starting wallet setup workflow...")
+                status_label.setWordWrap(True)
+                status_label.setStyleSheet("font-size: 16px; padding: 16px;")
+                layout.addWidget(status_label)
+                widget.resize(800, 200)
+                widget.show()
+                app.processEvents()
+            except Exception as exc:
+                print(f"[wallet-setup] GUI observe disabled: {exc}")
+                observe_gui = False
+
+        def _set_status(text: str, shot_name: str = None):
+            print(f"[wallet-setup] {text}")
+            if observe_gui and status_label is not None:
+                status_label.setText(text)
+                app.processEvents()
+                if shot_name:
+                    (artifact_dir / "screenshots").mkdir(parents=True, exist_ok=True)
+                    shot_path = artifact_dir / "screenshots" / f"{shot_name}.png"
+                    widget.grab().save(str(shot_path))
+
+        events = []
+
+        def _record(event: dict):
+            event["timestamp"] = time.time()
+            events.append(event)
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, sort_keys=True) + "\n")
+
+        # =====================================================================
+        # Step 1: Verify card is blank (factory-reset)
+        # =====================================================================
+        _set_status("Step 1: Checking card is blank (factory-reset)...", "step01_check_blank")
+
+        (_, sw1, sw2, d) = cc_live.card_get_status()
+        _record({
+            "event": "card_status_check",
+            "step": 1,
+            "setup_done": d.get("setup_done"),
+            "is_seeded": d.get("is_seeded"),
+            "sw": f"0x{sw1:02x}{sw2:02x}",
+        })
+
+        if d["setup_done"]:
+            _set_status(
+                "⚠ Card already initialized — skipping setup step.",
+                "step01_already_setup"
+            )
+            _record({"event": "skip_setup", "reason": "card already initialized"})
+            # Still usable: verify PIN and continue to seed import
+            _, sw1, sw2 = cc_live.card_verify_PIN_simple(TESTPIN)
+            assert (sw1, sw2) == (0x90, 0x00), (
+                f"TESTPIN verification failed on already-setup card: SW=0x{sw1:02x}{sw2:02x}"
+            )
+        else:
+            # =====================================================================
+            # Step 2: Card setup — set PIN and PUK
+            # =====================================================================
+            _set_status("Step 2: Initialising card with TESTPIN...", "step02_card_setup")
+
+            # Ensure secure channel is fully initialised before sending
+            # the card_setup APDU.  On a blank card the cc_live fixture
+            # may have raced with the CardObserver thread, leaving the
+            # channel half-ready (manifests as SW=0x9C23).
+            if getattr(cc_live, 'needs_secure_channel', False):
+                try:
+                    cc_live.card_initiate_secure_channel()
+                except Exception:
+                    pass  # already initialised — harmless
+
+            pin_tries_0 = 0x05
+            ublk_tries_0 = 0x01
+            ublk_0 = list(TESTPUK)
+            pin_tries_1 = 0x01
+            ublk_tries_1 = 0x01
+            pin_1 = list(os.urandom(16))
+            ublk_1 = list(os.urandom(16))
+
+            response, sw1, sw2 = cc_live.card_setup(
+                pin_tries_0, ublk_tries_0, list(TESTPIN), ublk_0,
+                pin_tries_1, ublk_tries_1, pin_1, ublk_1,
+                32, 0,  # secmemsize, memsize
+                0x01, 0x01, 0x01,  # ACLs
+            )
+            assert (sw1, sw2) == (0x90, 0x00), (
+                f"card_setup() failed: SW=0x{sw1:02x}{sw2:02x}"
+            )
+
+            _record({
+                "event": "card_setup",
+                "step": 2,
+                "status": "ok",
+                "sw": f"0x{sw1:02x}{sw2:02x}",
+                "pin_tries": pin_tries_0,
+                "puk_tries": ublk_tries_0,
+            })
+            _set_status("✓ Card setup complete. PIN configured.", "step02_setup_done")
+
+        # =====================================================================
+        # Step 3: Import seed from HUNGRY_MNEMONIC
+        # =====================================================================
+        (_, _, _, d_after_setup) = cc_live.card_get_status()
+        assert d_after_setup["setup_done"] is True, "Card should be initialized by now"
+
+        if d_after_setup.get("is_seeded"):
+            _set_status(
+                "⚠ Card already seeded — resetting seed first.",
+                "step03_reset_seed"
+            )
+            _, sw1, sw2 = cc_live.card_reset_seed(list(TESTPIN))
+            assert (sw1, sw2) == (0x90, 0x00), (
+                f"card_reset_seed() failed: SW=0x{sw1:02x}{sw2:02x}"
+            )
+            _record({"event": "seed_reset", "step": 3, "reason": "card was already seeded"})
+
+        _set_status(
+            f"Step 3: Importing seed from mnemonic ({HUNGRY_MNEMONIC[:30]}...)...",
+            "step03_import_seed"
+        )
+
+        masterseed = self._masterseed()
+        authentikey = cc_live.card_bip32_import_seed(list(masterseed))
+
+        assert authentikey is not None, "card_bip32_import_seed() must return an authentikey"
+        assert cc_live.is_seeded is True, "cc.is_seeded must be True after import"
+
+        authentikey_hex = authentikey.get_public_key_bytes(compressed=True).hex()
+        _record({
+            "event": "seed_import",
+            "step": 3,
+            "status": "ok",
+            "mnemonic_preview": HUNGRY_MNEMONIC[:30] + "...",
+            "authentikey": authentikey_hex,
+        })
+        _set_status(
+            f"✓ Seed imported. Authentikey: {authentikey_hex[:16]}...",
+            "step03_seed_imported"
+        )
+
+        # =====================================================================
+        # Step 4: Derive xpubs and cross-check with software
+        # =====================================================================
+        _set_status("Step 4: Deriving xpubs and cross-checking...", "step04_derive_xpubs")
+
+        xpub_paths = [
+            ("m/84'/0'/0'", "p2wpkh"),       # native SegWit (BIP84)
+            ("m/44'/0'/0'", "standard"),     # legacy (BIP44)
+            ("m/49'/0'/0'", "p2wpkh-p2sh"),  # wrapped SegWit (BIP49)
+        ]
+
+        xpub_results = []
+        for path, xtype in xpub_paths:
+            card_xpub = _derive_xpub_from_card(cc_live, path, xtype)
+            sw_xpub = _derive_xpub_software(masterseed, path, xtype)
+
+            match = card_xpub == sw_xpub
+            xpub_results.append({
+                "path": path,
+                "xtype": xtype,
+                "card_xpub": card_xpub,
+                "sw_xpub": sw_xpub,
+                "match": match,
+            })
+
+            assert match, (
+                f"xpub mismatch at {path} ({xtype})!\n"
+                f"  card: {card_xpub}\n  sw:   {sw_xpub}"
+            )
+
+        _record({
+            "event": "xpub_derivation",
+            "step": 4,
+            "status": "ok",
+            "paths_checked": len(xpub_paths),
+            "all_match": all(r["match"] for r in xpub_results),
+            "results": xpub_results,
+        })
+        _set_status(
+            f"✓ All {len(xpub_paths)} xpub paths match software derivation.",
+            "step04_xpubs_ok"
+        )
+
+        # =====================================================================
+        # Step 5: Sign a message and verify the signature
+        # =====================================================================
+        sign_path = "m/84'/0'/0'/0/0"  # first receiving address, native SegWit
+        message = b"Satochip wallet setup test: hello from electrum-satochip"
+
+        _set_status(
+            f"Step 5: Signing message at {sign_path}...",
+            "step05_sign_message"
+        )
+
+        # Derive the key at the signing path
+        pubkey, _ = _derive_key(cc_live, sign_path)
+        pubkey_hex = pubkey.get_public_key_bytes(compressed=True).hex()
+
+        # Sign the message
+        sig4 = cc_live.card_sign_message(0xFF, pubkey, message, b'')
+        assert sig4 is not None, "card_sign_message returned None"
+        _, sw1, sw2, compsig = sig4
+
+        assert (sw1, sw2) == (0x90, 0x00), (
+            f"card_sign_message() failed: SW=0x{sw1:02x}{sw2:02x}"
+        )
+        assert len(compsig) == 65, f"Expected 65-byte compact sig, got {len(compsig)}"
+
+        # Verify the signature
+        pubkey.verify_message_for_address(compsig, message)
+
+        _record({
+            "event": "message_sign",
+            "step": 5,
+            "status": "ok",
+            "path": sign_path,
+            "pubkey": pubkey_hex,
+            "message": message.decode("utf-8"),
+            "signature_hex": compsig.hex(),
+            "signature_length": len(compsig),
+        })
+        _set_status(
+            f"✓ Message signed and verified.\n"
+            f"  Path: {sign_path}\n"
+            f"  Pubkey: {pubkey_hex[:16]}...\n"
+            f"  Sig: {compsig.hex()[:32]}...",
+            "step05_signed_ok"
+        )
+
+        # =====================================================================
+        # Step 6: Also sign a hash to prove ECDSA transaction signing works
+        # =====================================================================
+        _set_status("Step 6: Signing a hash (ECDSA) to verify transaction signing...", "step06_sign_hash")
+
+        test_hash = hashlib.sha256(hashlib.sha256(
+            b"electrum-satochip-wallet-setup-test"
+        ).digest()).digest()
+
+        sig_der, sw1, sw2 = cc_live.card_sign_transaction_hash(
+            0xFF, list(test_hash), None
+        )
+        assert (sw1, sw2) == (0x90, 0x00), (
+            f"card_sign_transaction_hash() failed: SW=0x{sw1:02x}{sw2:02x}"
+        )
+        assert bytes(sig_der)[0] == 0x30, "Expected DER SEQUENCE tag"
+
+        # Verify ECDSA
+        _verify_ecdsa(pubkey, test_hash, bytes(sig_der))
+
+        _record({
+            "event": "hash_sign",
+            "step": 6,
+            "status": "ok",
+            "hash": test_hash.hex(),
+            "der_sig_hex": bytes(sig_der).hex(),
+            "der_sig_length": len(sig_der),
+        })
+        _set_status(
+            f"✓ ECDSA hash signed and verified.\n"
+            f"  DER sig: {bytes(sig_der).hex()[:32]}...",
+            "step06_hash_signed_ok"
+        )
+
+        # =====================================================================
+        # Step 7: Final status report
+        # =====================================================================
+        (_, sw1_f, sw2_f, d_final) = cc_live.card_get_status()
+
+        _record({
+            "event": "workflow_complete",
+            "step": 7,
+            "status": "ok",
+            "card_status": {
+                "setup_done": d_final.get("setup_done"),
+                "is_seeded": d_final.get("is_seeded"),
+                "PIN0_remaining_tries": d_final.get("PIN0_remaining_tries"),
+                "protocol_version": d_final.get("protocol_version"),
+            },
+            "artifact_dir": str(artifact_dir),
+            "total_events": len(events),
+        })
+
+        _set_status(
+            f"✓ WORKFLOW COMPLETE — Wallet setup & sign verified.\n"
+            f"  Setup done: {d_final.get('setup_done')}\n"
+            f"  Is seeded: {d_final.get('is_seeded')}\n"
+            f"  PIN tries: {d_final.get('PIN0_remaining_tries')}\n"
+            f"  Events logged: {len(events)}\n"
+            f"  Artifacts: {artifact_dir}",
+            "step07_complete"
+        )
+
+        if observe_gui and app is not None:
+            # Keep the window visible briefly so user can see final state
+            import time as _time
+            _time.sleep(2)
+            app.processEvents()
+
+        # Final assertions
+        assert d_final["setup_done"] is True
+        assert d_final["is_seeded"] is True
+        assert len(events) >= 5, f"Expected at least 5 events, got {len(events)}"
+        assert log_path.exists(), f"JSONL log not written: {log_path}"
 
 # =============================================================================
 # Phase 4b: Session Timeout

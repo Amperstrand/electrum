@@ -30,6 +30,19 @@ def pytest_configure(config):
         "markers",
         "requires_card: test requires physical Satochip card; skipped if unavailable"
     )
+    config.addinivalue_line(
+        "markers",
+        "destructive_card: intentionally modifies or blocks card state; disabled by default"
+    )
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--allow-destructive-card-tests",
+        action="store_true",
+        default=False,
+        help="run tests marked destructive_card (can block/reset test card)",
+    )
 
 
 # =============================================================================
@@ -194,3 +207,11 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "integration" in item.keywords:
                 item.add_marker(skip_pcscd)
+
+    if not config.getoption("--allow-destructive-card-tests"):
+        skip_destructive = pytest.mark.skip(
+            reason="destructive card test disabled (use --allow-destructive-card-tests)"
+        )
+        for item in items:
+            if "destructive_card" in item.keywords:
+                item.add_marker(skip_destructive)

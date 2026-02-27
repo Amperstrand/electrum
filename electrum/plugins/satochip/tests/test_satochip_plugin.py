@@ -1065,27 +1065,27 @@ class TestSetupDeviceBranches(ElectrumTestCase):
         self.assertIn("disconnected", str(ctx.exception))
 
     def test_setup_already_done(self):
-        """card_setup returning 0x9C07 shows error and returns early (no verify_PIN)."""
+        """card_setup returning 0x9C07 raises UserFacingException and stops."""
         p, client, handler = self._mk_plugin_with_client(card_setup_return=([], 0x9C, 0x07))
-        p._setup_device("1234", "dev1", handler)
-        handler.show_error.assert_called_once()
-        self.assertIn("already initialized", handler.show_error.call_args[0][0])
+        with self.assertRaises(UserFacingException) as ctx:
+            p._setup_device("1234", "dev1", handler)
+        self.assertIn("already initialized", str(ctx.exception))
         client.verify_PIN.assert_not_called()
 
     def test_setup_generic_failure(self):
-        """card_setup returning unexpected SW shows error and returns early (no verify_PIN)."""
+        """card_setup returning unexpected SW raises UserFacingException and stops."""
         p, client, handler = self._mk_plugin_with_client(card_setup_return=([], 0x6F, 0x00))
-        p._setup_device("1234", "dev1", handler)
-        handler.show_error.assert_called_once()
-        self.assertIn("Failed to set up card", handler.show_error.call_args[0][0])
+        with self.assertRaises(UserFacingException) as ctx:
+            p._setup_device("1234", "dev1", handler)
+        self.assertIn("Failed to set up card", str(ctx.exception))
         client.verify_PIN.assert_not_called()
 
     def test_setup_exception(self):
-        """Exception during card_setup shows error and returns early (no verify_PIN)."""
+        """Exception during card_setup bubbles up and verify_PIN is not called."""
         p, client, handler = self._mk_plugin_with_client(card_setup_exc=RuntimeError("hw fail"))
-        p._setup_device("1234", "dev1", handler)
-        handler.show_error.assert_called_once()
-        self.assertIn("hw fail", handler.show_error.call_args[0][0])
+        with self.assertRaises(RuntimeError) as ctx:
+            p._setup_device("1234", "dev1", handler)
+        self.assertIn("hw fail", str(ctx.exception))
         client.verify_PIN.assert_not_called()
 
     def test_setup_precheck_already_seeded_raises(self):
