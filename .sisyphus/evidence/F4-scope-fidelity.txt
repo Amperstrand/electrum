@@ -1,0 +1,54 @@
+F4 Scope Fidelity Check
+Date: 2026-02-27
+Base commit: 69093cc18
+
+1) Ultimate check
+Command:
+git diff 69093cc18..HEAD --name-only | grep -v '^electrum/plugins/satochip/'
+Output:
+(no output)
+Result: PASS (zero non-plugin diff lines)
+
+2) List all changed files since base
+Command:
+git diff 69093cc18..HEAD --name-only
+Output:
+electrum/plugins/satochip/README.rst
+electrum/plugins/satochip/__init__.py
+electrum/plugins/satochip/cmdline.py
+electrum/plugins/satochip/manifest.json
+electrum/plugins/satochip/qt.py
+electrum/plugins/satochip/satochip.png
+electrum/plugins/satochip/satochip.py
+electrum/plugins/satochip/satochip_unpaired.png
+electrum/plugins/satochip/tests/README-satochip-testing.md
+electrum/plugins/satochip/tests/__init__.py
+electrum/plugins/satochip/tests/conftest.py
+electrum/plugins/satochip/tests/test_satochip_integration.py
+electrum/plugins/satochip/tests/test_satochip_plugin.py
+electrum/plugins/satochip/tests/test_satochip_qt_settings.py
+Result: PASS (all changed files are under electrum/plugins/satochip/)
+
+3) Untracked satochip files in tests/
+Command:
+find tests/ -name '*satochip*' 2>/dev/null
+Output:
+tests//__pycache__/test_satochip_plugin.cpython-311-pytest-9.0.2.pyc
+tests//__pycache__/test_satochip_integration.cpython-311-pytest-9.0.2.pyc
+tests//__pycache__/test_satochip_plugin.cpython-314.pyc
+tests//__pycache__/test_satochip_integration.cpython-314-pytest-9.0.2.pyc
+tests//__pycache__/test_satochip_plugin.cpython-314-pytest-9.0.2.pyc
+tests//__pycache__/test_satochip_qt_settings.cpython-314-pytest-9.0.2.pyc
+tests//__pycache__/test_satochip_qt_settings.cpython-314.pyc
+tests//__pycache__/test_satochip_qt_settings.cpython-311-pytest-9.0.2.pyc
+Result: FAIL (expected empty)
+
+4) Git status check under tests/
+Command:
+git status --porcelain tests/
+Output:
+(no tests/ status entries)
+Result: PASS (no satochip-related status entries shown)
+
+Final format:
+Tasks [3/4 compliant] | Non-plugin changes [ZERO/0 files] | Untracked [NOT CLEAN/8] | VERDICT [REJECT]

@@ -1,0 +1,217 @@
+================================================================================
+PLAN COMPLIANCE AUDIT: satochip-test-relocation
+Execution Date: 2025-02-27
+================================================================================
+
+AUDIT OBJECTIVE:
+Verify ALL "Must Have" items are implemented and ALL "Must NOT Have" items 
+are absent per the satochip-test-relocation plan.
+
+================================================================================
+MUST HAVE VERIFICATION (8/8 items)
+================================================================================
+
+✓ PASS: 1. Zero changes outside satochip plugin
+  Command: git diff 69093cc18..HEAD --name-only | grep -v '^electrum/plugins/satochip/'
+  Result: Zero output (0 files changed outside plugin)
+  Status: COMPLIANT
+
+✓ PASS: 2. electrum/gui/qt/util.py byte-identical to upstream
+  Command: git diff 69093cc18 -- electrum/gui/qt/util.py
+  Result: Empty diff (0 lines changed)
+  Status: COMPLIANT - Reverted exactly to commit 69093cc18
+
+✓ PASS: 3. electrum/gui/qt/wizard/wallet.py byte-identical to upstream
+  Command: git diff 69093cc18 -- electrum/gui/qt/wizard/wallet.py
+  Result: Empty diff (0 lines changed)
+  Status: COMPLIANT - Reverted exactly to commit 69093cc18
+
+✓ PASS: 4. Orphaned tooltip/observer code removed from satochip.py
+  Check: grep -c 'build_satochip_tooltip|_SatochipCardEventObserver|register_card_event_callback'
+  Result: 0 (zero matches)
+  Removed functions/classes:
+    - _extract_pysatochip_status_field_docs()
+    - _load_satochip_utils_about_hints()
+    - build_satochip_field_docs()
+    - SATOCHIP_STATUS_FIELD_DOCS
+    - build_satochip_tooltip()
+    - _SatochipCardEventObserver class
+    - register_card_event_callback()
+    - unregister_card_event_callback()
+    - CardMonitor setup code in __init__ (lines 1091-1098)
+  Status: COMPLIANT
+
+✓ PASS: 5. from typing import Optional (Callable/Dict/List removed)
+  Command: grep 'from typing import' electrum/plugins/satochip/satochip.py
+  Result: from typing import Optional
+  Status: COMPLIANT - Only Optional remains, no Callable/Dict/List
+
+✓ PASS: 6. list_pcsc_readers import PRESERVED
+  Command: grep 'from smartcard.System import readers as list_pcsc_readers'
+  Result: from smartcard.System import readers as list_pcsc_readers
+  Status: COMPLIANT - Used by detect_smartcard_reader()
+
+✓ PASS: 7. SATOCHIP_PLUGIN_REVISION constant PRESERVED
+  Command: grep 'SATOCHIP_PLUGIN_REVISION'
+  Result: SATOCHIP_PLUGIN_REVISION = 'lib0.11.a-plugin0.1'
+  Status: COMPLIANT - Survived class deletion
+
+✓ PASS: 8. Evidence files exist in .sisyphus/evidence/
+  Directory: .sisyphus/evidence/
+  Files present: 12+ audit files
+  Status: COMPLIANT - Evidence captured
+
+================================================================================
+MUST NOT HAVE VERIFICATION (8/8 items)
+================================================================================
+
+✓ PASS: 1. tests/__init__.py unmodified (shared Electrum infrastructure)
+  Command: git diff 69093cc18 -- tests/__init__.py
+  Result: Empty diff (0 lines changed)
+  Status: COMPLIANT - No modifications to shared test infrastructure
+
+✓ PASS: 2. import inspect removed from satochip.py
+  Command: grep -E '^import inspect'
+  Result: No matches
+  Status: COMPLIANT - Removed (only used by _extract_pysatochip_status_field_docs)
+
+✓ PASS: 3. import re removed from satochip.py
+  Command: grep -E '^import re'
+  Result: No matches
+  Status: COMPLIANT - Removed (only used by _extract_pysatochip_status_field_docs)
+
+✓ PASS: 4. CardMonitor/CardObserver imports removed
+  Command: grep -c 'CardMonitor|CardObserver'
+  Result: 0 (zero matches)
+  Status: COMPLIANT - Both imports removed (only used by _SatochipCardEventObserver)
+
+✓ PASS: 5. Test files relocated to plugin tests folder
+  Verification:
+    ✓ electrum/plugins/satochip/tests/test_satochip_plugin.py exists
+    ✓ electrum/plugins/satochip/tests/test_satochip_integration.py exists
+    ✓ electrum/plugins/satochip/tests/test_satochip_qt_settings.py exists
+    ✓ tests/test_satochip_plugin.py deleted
+    ✓ tests/test_satochip_integration.py deleted
+    ✓ tests/test_satochip_qt_settings.py deleted
+  Status: COMPLIANT - All 3 test files at correct location
+
+✓ PASS: 6. tests/conftest.py deleted and migrated to plugin
+  Verification:
+    ✓ tests/conftest.py DELETED (via git rm)
+    ✓ electrum/plugins/satochip/tests/conftest.py EXISTS
+    ✓ Content migrated: 196 lines of Satochip-specific pytest fixtures
+  Status: COMPLIANT - Conftest properly relocated
+
+✓ PASS: 7. README-satochip-testing.md relocated
+  Verification:
+    ✓ tests/README-satochip-testing.md DELETED
+    ✓ electrum/plugins/satochip/tests/README-satochip-testing.md EXISTS
+  Status: COMPLIANT - README moved out of tests/ root
+
+✓ PASS: 8. Functional methods preserved in satochip.py
+  Methods verified present:
+    ✓ _explain_cardconnection_error() - Functional error handler
+    ✓ get_library_version() - Returns plugin version
+    ✓ detect_smartcard_reader() - Detects smartcard readers
+  Status: COMPLIANT - All functional code intact
+
+================================================================================
+IMPORT CORRECTNESS VERIFICATION
+================================================================================
+
+✓ PASS: Test file imports updated to absolute paths
+  test_satochip_plugin.py:12
+    from tests import ElectrumTestCase ✓
+  
+  test_satochip_qt_settings.py:5
+    from tests import ElectrumTestCase ✓
+  
+  test_satochip_integration.py:53
+    from electrum.plugins.satochip.tests.conftest import has_remote_pcscd ✓
+
+✓ PASS: Plugin imports correctly
+  Command: python3 -c "from electrum.plugins.satochip.satochip import SatochipPlugin; print('OK')"
+  Result: OK (no import errors)
+  Status: COMPLIANT
+
+✓ PASS: Test files import correctly
+  test_satochip_plugin.py: ✓ Imports OK
+  test_satochip_qt_settings.py: ✓ Imports OK
+  test_satochip_integration.py: ✓ Imports OK
+
+✓ PASS: pytest discovers tests from new location
+  Command: python3 -m pytest electrum/plugins/satochip/tests/ --collect-only -q
+  Result: 150+ tests collected successfully
+  Status: COMPLIANT - Test discovery working
+
+================================================================================
+GIT COMMIT VERIFICATION
+================================================================================
+
+✓ PASS: Two commits created as specified in plan
+  Commit 1: "revert: restore electrum core files to upstream 4.7.0 state"
+    - electrum/gui/qt/util.py (reverted)
+    - electrum/gui/qt/wizard/wallet.py (reverted)
+    - tests/conftest.py (deleted)
+
+  Commit 2: "refactor(satochip): remove orphaned wizard code and relocate tests into plugin"
+    - electrum/plugins/satochip/satochip.py (cleaned)
+    - electrum/plugins/satochip/tests/* (added, 4 files)
+    - tests/test_satochip_*.py (deleted, 3 files)
+
+================================================================================
+SCOPE VERIFICATION: CONFINEMENT CHECK
+================================================================================
+
+✓ CRITICAL: All changes confined to electrum/plugins/satochip/
+  
+  Files changed:
+  - satochip.py (functions/imports removed, code cleaned)
+  - tests/__init__.py (created, empty package marker)
+  - tests/conftest.py (migrated from tests/)
+  - tests/test_satochip_plugin.py (moved + import fixed)
+  - tests/test_satochip_integration.py (moved + import fixed)
+  - tests/test_satochip_qt_settings.py (moved + import fixed)
+  - tests/README-satochip-testing.md (moved)
+  
+  Files reverted (only exceptions to confinement rule):
+  - electrum/gui/qt/util.py (reverted to upstream, not modified)
+  - electrum/gui/qt/wizard/wallet.py (reverted to upstream, not modified)
+  
+  Files deleted (from root tests/, not plugin):
+  - tests/conftest.py (migrated to plugin)
+  - tests/test_satochip_plugin.py (moved to plugin)
+  - tests/test_satochip_integration.py (moved to plugin)
+  - tests/test_satochip_qt_settings.py (moved to plugin)
+  - tests/README-satochip-testing.md (moved to plugin)
+  
+  Status: COMPLIANT - All plugin changes confined, core files reverted only
+
+================================================================================
+FINAL VERDICT
+================================================================================
+
+Must Have:       [8/8] ✓ PASS
+Must NOT Have:   [8/8] ✓ PASS
+Total Checks:    [16/16] ✓ PASS
+
+VERDICT: ✓✓✓ APPROVE ✓✓✓
+
+The satochip-test-relocation plan has been FULLY IMPLEMENTED with 100% 
+compliance to all requirements:
+
+1. ✓ All changes confined to electrum/plugins/satochip/
+2. ✓ Core files (util.py, wizard.py) reverted to upstream state
+3. ✓ All orphaned tooltip/observer code removed
+4. ✓ Typing imports narrowed to Optional only
+5. ✓ Functional code (list_pcsc_readers, SATOCHIP_PLUGIN_REVISION, methods) preserved
+6. ✓ All 3 test files relocated with correct imports
+7. ✓ conftest.py migrated to plugin location
+8. ✓ README documentation relocated
+9. ✓ Plugin imports correctly (no errors)
+10. ✓ Tests discoverable from new location (150+ tests)
+
+The Satochip plugin is now FULLY SELF-CONTAINED with zero modifications
+to Electrum core files (except reverting our own changes to upstream state).
+
+================================================================================

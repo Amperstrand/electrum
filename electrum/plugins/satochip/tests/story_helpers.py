@@ -258,3 +258,113 @@ def puk_preflight_check(cc):
         )
 
     return puk_tries
+
+
+from typing import Any
+
+
+def wait_for_card_absent(cc: "Any", timeout: float = 30.0, app=None) -> bool:
+    start = time.time()
+    while (time.time() - start) < timeout:
+        if app is not None:
+            app.processEvents()
+        if not cc.card_present:
+            return True
+        time.sleep(0.3)
+    return not cc.card_present
+
+
+def wait_for_card_present(cc: "Any", timeout: float = 60.0, app=None) -> bool:
+    start = time.time()
+    while (time.time() - start) < timeout:
+        if app is not None:
+            app.processEvents()
+        if not cc.card_present:
+            time.sleep(0.3)
+            continue
+        if getattr(cc, "cardservice", None) and hasattr(
+            getattr(cc.cardservice, "connection", None), "transmit"
+        ):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def apdu_factory_reset(
+    cc: "Any",
+    status_fn,
+    app=None,
+    timeout_per_step: int = 60,
+) -> bool:
+    cc.set_mode_factory_reset(True)
+    try:
+        status_fn("Remove card for fresh session...", "reset_00_remove")
+        if not wait_for_card_absent(cc, timeout=timeout_per_step, app=app):
+            raise RuntimeError("Factory reset timed out waiting for card removal.")
+
+        status_fn("Reinsert card to begin reset...", "reset_01_reinsert")
+        if not wait_for_card_present(cc, timeout=timeout_per_step, app=app):
+            raise RuntimeError("Factory reset timed out waiting for card reinsertion.")
+
+        time.sleep(2.0)
+
+        step_count = 0
+        cla_retries = 0
+
+        while True:
+            (_, sw1, sw2) = cc.card_reset_factory_signal()
+
+            if sw1 == 0xFF and sw2 == 0x00:
+                cc.card_disconnect()
+                return True
+
+            if sw1 == 0xFF and sw2 == 0xFF:
+                status_fn("Card not removed. Remove card...", "reset_retry_remove")
+                if not wait_for_card_absent(cc, timeout=timeout_per_step, app=app):
+                    raise RuntimeError("Factory reset timed out waiting for card removal.")
+
+                status_fn("Reinsert card...", "reset_retry_reinsert")
+                if not wait_for_card_present(cc, timeout=timeout_per_step, app=app):
+                    raise RuntimeError("Factory reset timed out waiting for card reinsertion.")
+
+                time.sleep(2.0)
+                continue
+
+            if sw1 == 0xFF and sw2 > 0x00:
+                step_count += 1
+                status_fn(
+                    f"Step {step_count} ({sw2} remaining): Remove card...",
+                    f"reset_{step_count:02d}_remove",
+                )
+                if not wait_for_card_absent(cc, timeout=timeout_per_step, app=app):
+                    raise RuntimeError("Factory reset timed out waiting for card removal.")
+
+                status_fn("Reinsert card...", f"reset_{step_count:02d}_reinsert")
+                if not wait_for_card_present(cc, timeout=timeout_per_step, app=app):
+                    raise RuntimeError("Factory reset timed out waiting for card reinsertion.")
+
+                time.sleep(2.0)
+                continue
+
+            if sw1 == 0x9C and sw2 == 0x04:
+                return True
+
+            if sw1 == 0x6D and sw2 == 0x00:
+                raise RuntimeError("Factory reset failed: instruction not supported (error 0x6D00).")
+
+            if sw1 == 0x6E and sw2 == 0x00:
+                cla_retries += 1
+                if cla_retries > 3:
+                    raise RuntimeError("Factory reset failed: class not supported (error 0x6E00).")
+                print(
+                    f"[factory-reset] Warning: got 0x6E00 (CLA not supported), "
+                    f"retrying ({cla_retries}/3) after observer settle delay."
+                )
+                time.sleep(3.0)
+                continue
+
+            raise RuntimeError(
+                f"Factory reset failed with unexpected error: {hex(256 * sw1 + sw2)}"
+            )
+    finally:
+        cc.set_mode_factory_reset(False)

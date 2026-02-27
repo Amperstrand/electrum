@@ -38,11 +38,16 @@ Stories run in dependency order:
   Story 3 — TestStory3PukRecoveryAndVerify (PUK recovery, verify PIN restored)
 
 Options:
-  --headless      Run without GUI observer (default: SATOCHIP_OBSERVE_GUI=1)
+  --headless      Run without GUI observer. Automatically skips Story 0 (factory
+                  reset requires physical card interaction with GUI prompts).
+                  Use without --headless to include Story 0.
   --story N       Run only Story N (e.g. --story 2 runs TestStory2...)
   --no-reset      Skip Story 0 (factory reset). Implies card is already set up.
                   If both --story and --no-reset are given, --story takes precedence.
   --help          Show this help and exit
+
+Note: Story 0 (Factory Reset) requires GUI mode for physical card removal/reinsertion
+      prompts. When --headless is used without --story 0, Story 0 is automatically skipped.
 
 Extra args are passed directly to pytest (e.g. --tb=short, -x, etc.)
 
@@ -93,6 +98,14 @@ done
 if [[ ${#story_filter[@]} -gt 0 && $no_reset -eq 1 ]]; then
     echo "INFO: --story and --no-reset both specified; --story takes precedence, ignoring --no-reset"
     no_reset=0
+fi
+
+# --headless implies --no-reset when Story 0 would run (needs GUI for physical card interaction)
+if [[ $headless -eq 1 && $no_reset -eq 0 && ${#story_filter[@]} -eq 0 ]]; then
+    echo "WARNING: Story 0 requires GUI mode (physical card interaction)."
+    echo "         Skipping factory reset (--no-reset implied)."
+    echo "         Use without --headless to include Story 0."
+    no_reset=1
 fi
 
 # If --no-reset and no --story, add exclusion filter

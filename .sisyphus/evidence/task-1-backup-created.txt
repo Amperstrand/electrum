@@ -1,0 +1,18 @@
+# Task 1: Backup Branch Creation Evidence
+
+## Date
+2026-02-26
+
+## Commands Executed
+1. `git rev-parse HEAD` -> c7ec78e47a8b323e669d83226bc6af315f6a7d04
+2. `git branch backup/pre-cleanup-v4.7.x HEAD` -> Success
+3. `git rev-parse backup/pre-cleanup-v4.7.x` -> c7ec78e47a8b323e669d83226bc6af315f6a7d04
+4. `git branch --list backup/pre-cleanup-v4.7.x` -> backup/pre-cleanup-v4.7.x
+
+## Verification
+- [x] Branch `backup/pre-cleanup-v4.7.x` created at current HEAD
+- [x] `git rev-parse backup/pre-cleanup-v4.7.x` returns `c7ec78e47a8b323e669d83226bc6af315f6a7d04` (current HEAD hash)
+- [x] `git branch --list backup/pre-cleanup-v4.7.x` shows the branch exists
+
+## Result
+PASS - All checkpoints verified

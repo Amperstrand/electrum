@@ -1,0 +1,52 @@
+=== Task 4: Noise Files Unstaged ===
+Date: $(date)
+
+VERIFICATION RESULTS:
+1. scripts/ in staging area: 0
+2. docs/ in staging area: 0
+3. Dockerfile in staging area: 0
+4. satochip_card_states: (none)
+5. README-satochip: (none)
+6. electrum_hardware: (none)
+7. satochip_pysatochip: (none)
+8. cmdline.py STILL staged: YES
+
+FILES STILL ON DISK (verified):
+- contrib/dev/Dockerfile.satochip
+- docs/satochip_flow.md
+- scripts/run_dev.sh
+(all 19 noise files remain as untracked)
+
+CURRENTLY STAGED FILES:
+
+git diff --cached --name-only:
+electrum/gui/qt/util.py
+electrum/gui/qt/wizard/wallet.py
+electrum/plugins/satochip/cmdline.py
+electrum/plugins/satochip/manifest.json
+electrum/plugins/satochip/qt.py
+electrum/plugins/satochip/satochip.py
+tests/conftest.py
+tests/test_satochip_integration.py
+tests/test_satochip_plugin.py
+tests/test_satochip_qt_settings.py
+
+UNTRACKED FILES (noise files are here):
+?? .cursor/
+?? .sisyphus/
+?? PYSATOCHIP_DEPENDENCY_ANALYSIS.md
+?? QT_VS_ELECTRUM_UX_REPORT.md
+?? REFACTORING_OPPORTUNITIES_REPORT.md
+?? Satochip-Utils/
+?? SatochipApplet/
+?? WORKING_NOTES.md
+?? contrib/dev/
+?? docs/
+?? electrum/plugins/satochip/satochip_card_states.md
+?? electrum_hardware_wallet_plugins_analysis.md
+?? notes-about-installing.md
+?? notes.md
+?? pysatochip/
+?? satochip_pysatochip_integration.md
+?? scripts/
+?? tests/README-satochip-testing.md

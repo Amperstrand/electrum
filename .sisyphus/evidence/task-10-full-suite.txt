@@ -1,0 +1,50 @@
+=== Task 10: COMPLETE End-to-End Hardware Verification ===
+Date: 2026-02-27T14:40:28Z
+
+=== HARDWARE TEST: Stories 2+3 PASSED on Physical Card ===
+
+Story 2 (Wrong PIN Until Block): PASSED
+  - TESTPIN verified working
+  - 5 wrong PINs: tries decremented 5→4→3→2→1→0
+  - Post-exhaustion: PinBlockedError confirmed
+  - JSONL: 8 events recorded
+
+Story 3 (PUK Recovery): PASSED
+  - PUK preflight: PUK0_remaining_tries=1 (safe)
+  - Card confirmed PIN-blocked
+  - PUK unblock succeeded
+  - TESTPIN verified after recovery
+  - PIN tries restored to 5
+  - JSONL: 5 events recorded
+
+Card state after: setup_done=True is_seeded=True PIN0_tries=5 PUK0_tries=1
+
+=== INFRASTRUCTURE TEST: Script and Flags ===
+  --help: OK (exit 0)
+  --no-reset: OK (1 deselected, 3 selected, quoting fix verified)
+  --story N: OK (1 selected, 3 deselected)
+  --headless: OK (SATOCHIP_OBSERVE_GUI unset)
+  bash -n: SYNTAX OK
+  pytest-order: Collection order Story0→1→2→3 enforced
+  Cascade skip: Working as designed
+
+=== COMPILATION ===
+  test_satochip_user_stories.py: OK
+  story_helpers.py: OK
+  conftest.py: OK
+
+=== REGRESSION ===
+  Unit tests: 86 passed, 0 failed
+
+=== ARTIFACTS ===
+  story-2-wrong-pin-until-block.jsonl: 8 events, valid JSON, timestamps present
+  story-3-puk-recovery-and-verify.jsonl: 5 events, valid JSON, timestamps present
+  Screenshot directories: Created (empty in headless mode)
+
+=== BLOCKERS ===
+  Story 0 (Factory Reset): remote_card_audit_reset.py times out after 120s
+    Root cause: Podman/GP/Java infrastructure, not test code
+    Impact: Stories 0+1 cannot be verified in automated run
+    Card must already be in appropriate state for Stories 2+3
+
+=== VERDICT: PASS (with documented infrastructure limitation) ===

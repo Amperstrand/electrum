@@ -1,0 +1,32 @@
+Task 1: Revert 2 Electrum core files to upstream state and delete tests/conftest.py
+================================================================================
+
+Date: 2026-02-26
+Commit: 79416d079
+
+Commands Executed:
+------------------
+1. git checkout 69093cc18 -- electrum/gui/qt/util.py
+2. git checkout 69093cc18 -- electrum/gui/qt/wizard/wallet.py
+3. git rm tests/conftest.py
+4. git add electrum/gui/qt/util.py electrum/gui/qt/wizard/wallet.py
+5. git commit -m "revert: restore electrum core files to upstream 4.7.0 state"
+
+Verification Results:
+---------------------
+[X] git diff 69093cc18 -- electrum/gui/qt/util.py → EMPTY (byte-identical to upstream)
+[X] git diff 69093cc18 -- electrum/gui/qt/wizard/wallet.py → EMPTY (byte-identical to upstream)
+[X] test ! -f tests/conftest.py → PASSED (file deleted)
+[X] git log -1 --oneline → 79416d079 revert: restore electrum core files to upstream 4.7.0 state
+
+Summary:
+--------
+- 2 Electrum core files reverted to upstream 4.7.0 state
+- 1 test config file deleted (tests/conftest.py)
+- Commit shows 3 files changed, 2 insertions(+), 300 deletions(-)
+
+Files Affected:
+---------------
+- electrum/gui/qt/util.py (reverted)
+- electrum/gui/qt/wizard/wallet.py (reverted)
+- tests/conftest.py (deleted)

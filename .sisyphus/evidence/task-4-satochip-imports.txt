@@ -1,0 +1,13 @@
+logging_utils import: OK
+DEBUG:electrum.plugins.satochip.satochip:Instrumented 45 functions in electrum.plugins.satochip.satochip
+satochip import: OK
+Failed to load symbol for: SCardControl132, dlsym(0x45266bb0, SCardControl132): symbol not found!
+DEBUG:electrum.plugins.satochip.satochip:Instrumented 45 functions in electrum.plugins.satochip.satochip
+DEBUG:electrum.plugins.satochip.cmdline:Instrumented 2 functions in electrum.plugins.satochip.cmdline
+cmdline import: OK
+DEBUG:electrum.gui.qt:successfully preloaded optional dependency: PyQt6.QtMultimedia
+Failed to load symbol for: SCardControl132, dlsym(0x45266bb0, SCardControl132): symbol not found!
+DEBUG:electrum.plugins.satochip.satochip:Instrumented 45 functions in electrum.plugins.satochip.satochip
+DEBUG:electrum.plugins.satochip.qt:Instrumented 53 functions in electrum.plugins.satochip.qt
+qt import: OK
+Failed to load symbol for: SCardControl132, dlsym(0x4526d910, SCardControl132): symbol not found!

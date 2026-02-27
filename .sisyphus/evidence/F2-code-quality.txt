@@ -1,0 +1,169 @@
+F2 CODE QUALITY REVIEW
+======================
+Date: 2026-02-27
+Reviewer: Sisyphus F2 task runner
+
+═══════════════════════════════════════════════════════════════════════════════
+1. TEST RUN RESULTS
+═══════════════════════════════════════════════════════════════════════════════
+
+Command: python3 -m pytest electrum/plugins/satochip/tests/test_satochip_plugin.py \
+         electrum/plugins/satochip/tests/test_satochip_qt_settings.py -v
+
+Results: 82 passed, 11 failed, 1 skipped
+Platform: Python 3.14.3, pytest 9.0.2, macOS 15.3.1
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+FAILURES BREAKDOWN (11 total):
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+[A] test_satochip_plugin.py — 3 failures in TestSetupDeviceBranches:
+    1. test_setup_already_done
+    2. test_setup_exception
+    3. test_setup_generic_failure
+
+    ROOT CAUSE: Tests expect _setup_device() to CATCH exceptions and call
+    handler.show_error() then return. Instead, the production code RAISES
+    UserFacingException (for setup_already_done, setup_generic_failure) and
+    propagates RuntimeError (for setup_exception).
+    
+    Test contract: p._setup_device(...) returns normally, handler.show_error called
+    Production contract: p._setup_device(...) raises on error
+    
+    These are TEST-vs-PRODUCTION contract mismatches. The tests were written
+    expecting error-swallowing behavior; the production code throws instead.
+    The tests need to use assertRaises() OR the production code needs to catch
+    and delegate to show_error().
+
+[B] test_satochip_qt_settings.py — 8 failures in TestSatochipQtSettings:
+    All fail with: AttributeError: module 'electrum.plugins.satochip.qt'
+                   has no attribute 'SatochipSettingsDialog'
+
+    ROOT CAUSE: The test file references satochip_qt.SatochipSettingsDialog,
+    but this class does NOT exist in qt.py.
+    
+    Classes that DO exist in qt.py:
+      - SelectOptionsDialog (line 1253)
+      - DeviceCertificateDialog (line 1304)
+      - Plugin (line 160)
+      - Satochip_Handler (line 545)
+      (plus wizard components)
+    
+    SatochipSettingsDialog was likely renamed or never created. The 8 test
+    methods in TestSatochipQtSettings are all dead-on-arrival due to this.
+
+[C] test_satochip_qt_settings.py — 1 skip:
+    test_set_2fa_paths — SKIPPED (expected, presumably hardware-dependent)
+
+═══════════════════════════════════════════════════════════════════════════════
+2. satochip.py IMPORT QUALITY CHECK
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ PASS: `from typing import Optional` — exactly as expected, only Optional
+✅ PASS: No `import inspect` present
+✅ PASS: No `import re` present
+✅ PASS: No `CardMonitor` import present
+✅ PASS: No `CardObserver` import present
+✅ PASS: No `build_satochip_tooltip` reference in satochip.py
+
+Full import block (satochip.py lines 1-40):
+  from os import urandom
+  import hashlib
+  import time
+  from typing import Optional
+  import electrum_ecc as ecc
+  from electrum_ecc.util import bip340_tagged_hash
+  from electrum import constants
+  from electrum.bitcoin import var_int
+  from electrum.i18n import _
+  from electrum.plugin import Device, DeviceInfo, runs_in_hwd_thread
+  from electrum.keystore import Hardware_KeyStore, bip39_to_seed, bip39_is_checksum_valid, ScriptTypeNotSupported
+  from electrum.transaction import Sighash
+  from electrum.wallet import Standard_Wallet
+  from electrum.wizard import NewWalletWizard
+  from electrum.util import UserFacingException
+  from electrum.crypto import hash_160, sha256d
+  from electrum.bip32 import BIP32Node, convert_bip32_strpath_to_intpath, convert_bip32_intpath_to_strpath
+  from electrum.logging import get_logger
+  from electrum.hw_wallet import HW_PluginBase, HardwareClientBase
+  import pysatochip
+  from pysatochip.CardConnector import CardConnector, UninitializedSeedError
+  from pysatochip.CardConnector import (CardNotPresentError, UnexpectedSW12Error, ...)
+  from pysatochip.Satochip2FA import Satochip2FA, SERVER_LIST
+  from .logging_utils import instrument_module_function_entries
+  from smartcard.Exceptions import CardRequestTimeoutException, CardConnectionException
+  from smartcard.CardType import AnyCardType
+  from smartcard.CardRequest import CardRequest
+  from smartcard.System import readers as list_pcsc_readers
+
+═══════════════════════════════════════════════════════════════════════════════
+3. TEST FILE IMPORT QUALITY CHECK
+═══════════════════════════════════════════════════════════════════════════════
+
+test_satochip_plugin.py:
+  ✅ PASS: `from tests import ElectrumTestCase` (absolute import, correct)
+  ✅ PASS: No `from . import ElectrumTestCase` (no relative import)
+
+test_satochip_qt_settings.py:
+  ✅ PASS: `from tests import ElectrumTestCase` (absolute import, correct)
+  ✅ PASS: No `from . import ElectrumTestCase` (no relative import)
+
+═══════════════════════════════════════════════════════════════════════════════
+4. CONFTEST.PY CHECK
+═══════════════════════════════════════════════════════════════════════════════
+
+File: electrum/plugins/satochip/tests/conftest.py ✅ EXISTS (196 lines)
+
+Markers registered:
+  ✅ "integration" — requires real Satochip hardware over remote pcscd
+  ✅ "manual"      — requires user interaction (e.g., 2FA app)
+  ✅ "requires_card" — requires physical Satochip card; skipped if unavailable
+
+Fixtures defined:
+  ✅ card_available (session-scoped)
+  ✅ remote_pcscd_available (session-scoped)
+  ✅ skip_if_no_card
+  ✅ skip_if_no_remote_pcscd
+  ✅ mock_card_connector
+  ✅ satochip_plugin
+
+Collection hook:
+  ✅ pytest_collection_modifyitems — auto-skips requires_card + integration tests
+
+═══════════════════════════════════════════════════════════════════════════════
+5. ORPHAN REFERENCE CHECK
+═══════════════════════════════════════════════════════════════════════════════
+
+  ✅ No `build_satochip_tooltip` in satochip.py (only in .md doc file, not code)
+  ✅ No `CardMonitor` or `CardObserver` references in satochip.py
+  ✅ No leftover relative test imports
+
+═══════════════════════════════════════════════════════════════════════════════
+6. VERDICT SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+Tests:         82 pass / 11 fail / 1 skip
+Import issues: 0 in satochip.py
+Orphan refs:   0 in satochip.py
+Test imports:  CORRECT (both files use absolute `from tests import ElectrumTestCase`)
+conftest.py:   EXISTS with all 3 markers + 6 fixtures
+
+VERDICT: ❌ REJECT
+
+REASON FOR REJECTION: 11 test failures — two distinct categories of bugs:
+
+  1. [CRITICAL] 8 failures in TestSatochipQtSettings:
+     `satochip_qt.SatochipSettingsDialog` does not exist in qt.py.
+     The class referenced by the tests was never created or was renamed.
+     All 8 tests in this class are permanently broken.
+
+  2. [MODERATE] 3 failures in TestSetupDeviceBranches:
+     Tests expect _setup_device() to catch errors and call handler.show_error().
+     Production code raises UserFacingException / propagates RuntimeError instead.
+     Contract mismatch between tests and implementation.
+
+REQUIRED FIXES BEFORE APPROVAL:
+  - Either create SatochipSettingsDialog in qt.py, OR update tests to target
+    the correct class name (SelectOptionsDialog / DeviceCertificateDialog)
+  - Either fix _setup_device() to catch+show_error, OR update 3 tests to use
+    assertRaises() matching the actual exception-raising behavior

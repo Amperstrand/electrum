@@ -364,3 +364,110 @@ Upstream references:
 | Card setup | `card_setup()` with PIN/PUK | `TestWalletSetupAndSign` step 2 |
 | 2FA challenge-response | 2FA key setup/reset | `do_challenge_response` + Qt 2FA flows (mock) |
 | Card label management | Card label APIs | Client label priority + Qt label-change (mock) |
+
+---
+
+## Factory Reset Approaches
+
+Returning a Satochip to factory state (blank card, `setup_done=False`) is the
+precondition for Story 0 and any fresh wallet test. Two approaches exist, each
+suited to a different context.
+
+| Approach | Mechanism | Card type | Physical interaction | Used by |
+|----------|-----------|-----------|---------------------|---------|
+| APDU-based | `card_reset_factory_signal()` via pysatochip | Any card (production or dev) | Required (~4 remove/reinsert cycles) | Story 0 (`TestStory0FactoryReset`) |
+| GP-based | GlobalPlatformPro via Podman/SSH | Dev/unlocked cards only | None (fully automated) | `scripts/remote_card_audit_reset.py` (standalone utility) |
+
+---
+
+### APDU-Based Reset (Story 0)
+
+Story 0 resets the card using a direct APDU sequence sent through pysatochip.
+No GP access or special key material is needed, so it works on production cards
+as well as development cards.
+
+**How it works:**
+
+1. `card_reset_factory_signal()` sends APDU `[0xB0, 0xFF, 0x00, 0x00, 0x00]` to
+   the card. This increments the card's internal reset counter.
+2. The card reports how many signals are still needed before the reset fires
+   (typically 4 total, dynamic per card).
+3. Between each APDU signal, the card **must be physically removed and
+   reinserted** into the reader. Software power cycling (`SCARD_UNPOWER_CARD`)
+   was tested and does **not** work — both approaches returned `0xFFFF`.
+   Physical removal is required.
+4. After reinsertion, a 2-second delay lets the pysatochip `CardMonitor` observer
+   complete initialization before the next signal is sent.
+5. Once all signals are received, the card resets to `setup_done=False`.
+
+A `mode_factory_reset` flag is set during the process to prevent the observer
+from interfering with the signal loop.
+
+**Run Story 0:**
+
+```bash
+# With GUI observer (required — user sees the step counter)
+SATOCHIP_OBSERVE_GUI=1 ./scripts/run_user_stories.sh --story 0
+```
+
+**Physical interaction:**
+
+The GUI window shows a live step counter:
+```
+Step N/M: Remove card and reinsert to continue...
+```
+
+No button clicks are needed. Card presence is auto-detected by pysatochip's
+`CardMonitor`. Remove the card, wait for the prompt to update, then reinsert.
+Repeat until all steps complete (~4 cycles).
+
+⚠ **`SATOCHIP_OBSERVE_GUI=1` is mandatory for Story 0.** Without the GUI,
+there is no way to see the step counter or confirm the card is ready for the
+next removal.
+
+⚠ **`--headless` automatically skips Story 0.** Passing `--headless` to
+`run_user_stories.sh` implies `--no-reset`, so the factory reset story is
+skipped entirely. Use headless mode only when the card is already in a known
+blank state.
+
+---
+
+### GP-Based Reset (Dev Utility)
+
+`scripts/remote_card_audit_reset.py` is a standalone development utility that
+resets a card using GlobalPlatformPro (GP). It connects to the remote card
+reader via a Podman VM and SSH tunnel, downloads `gp.jar` if needed, and
+issues a GP factory reset command directly.
+
+**Requirements:**
+
+- Podman VM running and accessible (`podman machine ssh regtest`)
+- SSH tunnel to the pcscd socket on the remote host (`192.168.13.202`)
+- Card must be **unlocked** (dev card with known GP keys). Production cards
+  with locked GP keys cannot be reset this way.
+- `gp.jar` from GlobalPlatformPro (downloaded automatically on first run)
+
+**Run the GP reset utility:**
+
+```bash
+python3 scripts/remote_card_audit_reset.py
+```
+
+No physical card interaction is needed. The script handles everything over the
+SSH/Podman tunnel. Useful for bulk resets during development when you need to
+cycle a card through many test runs without touching the reader.
+
+⚠ **This utility is NOT part of the user story test suite.** It's a separate
+development tool. The test suite always uses the APDU-based approach (Story 0)
+for factory resets, which works on any card type.
+
+---
+
+### Choosing an Approach
+
+| Situation | Use |
+|-----------|-----|
+| Running the full user story suite | APDU-based (Story 0) — automatic |
+| Card is production/locked | APDU-based only |
+| Bulk dev resets, no physical access needed | GP-based (`remote_card_audit_reset.py`) |
+| Card already blank, skip reset | `--no-reset` or `--headless` |

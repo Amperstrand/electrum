@@ -1,0 +1,24 @@
+electrum.plugin - DEBUG - Instrumented 100 functions in electrum.plugin
+electrum.keystore - DEBUG - Instrumented 121 functions in electrum.keystore
+electrum.wallet - DEBUG - Instrumented 323 functions in electrum.wallet
+electrum.plugins.satochip.logging_utils - DEBUG - Instrumented 1 functions in <_CustomLogger smoke_test (WARNING)>
+electrum.plugins.satochip.logging_utils - DEBUG - ENTER add(a=1(int), b=2(int))
+electrum.plugins.satochip.logging_utils - DEBUG - EXIT  add → 3(int) [0.0000s]
+
+=== VERBOSE LOGGING INTEGRATION TEST ===
+  T1-logging_utils-import: PASS
+  T2-sync-wrapper: PASS
+  T3-skip-guards: PASS
+  T4-git-version: PASS (4.7.0-23-g692faa8f9-dirty)
+  T5-compile-logging_utils.py: PASS
+  T5-compile-logging.py: PASS
+  T5-compile-keystore.py: PASS
+  T5-compile-plugin.py: PASS
+  T5-compile-wallet.py: PASS
+  T5-compile-wizard.py: PASS
+  T5-compile-plugin.py: PASS
+  T5-compile-qt.py: PASS
+  T6-shell-script-syntax: PASS
+
+  TOTAL: 13/13 passed
+  STATUS: ALL TESTS PASSED ✔

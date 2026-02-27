@@ -1,0 +1,75 @@
+=== Task 3: Soft Reset Evidence ===
+Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+## Command Executed
+git reset --soft HEAD~18
+
+## Pre-Reset Verification (Commit Boundary)
+HEAD~17: ccaf230c2 amperstand Satochip manifest: declare pyscard dependency
+HEAD~18: ab563c68e Toporin use manifest.json instead of loading init file for plugin registration
+
+## Post-Reset Verification
+
+### HEAD Position
+HEAD: ab563c68e Toporin use manifest.json instead of loading init file for plugin registration
+
+### Staged Changes Summary
+ contrib/dev/Dockerfile.satochip                   |   45 +
+ docs/coldcard_flow.md                             |  220 +
+ docs/hardware_wallet_comparison.md                |  547 +++
+ docs/satochip_flow.md                             |  288 ++
+ electrum/gui/qt/util.py                           |    2 +
+ electrum/gui/qt/wizard/wallet.py                  |   99 +-
+ electrum/plugins/satochip/cmdline.py              |   54 +
+ electrum/plugins/satochip/manifest.json           |    4 +-
+ electrum/plugins/satochip/qt.py                   |  992 ++--
+ electrum/plugins/satochip/satochip.py             | 1057 ++++-
+ electrum/plugins/satochip/satochip_card_states.md |  393 ++
+ electrum_hardware_wallet_plugins_analysis.md      | 1154 +++++
+ satochip_pysatochip_integration.md                |  109 +
+ scripts/build_dev_image.sh                        |   30 +
+ scripts/detect_satochip_family_card.py            |  190 +
+ scripts/generate_satochip_flow.py                 |  632 +++
+ scripts/remote_card_audit_reset.py                |  293 ++
+ scripts/run_dev.sh                                |   61 +
+ scripts/run_electrum_docker.sh                    |   54 +
+ scripts/run_electrum_remote.sh                    |  117 +
+ scripts/run_in_docker.sh                          |   48 +
+ scripts/setup_remote_pcscd.sh                     |  117 +
+ scripts/test_card_raw.py                          |   67 +
+ scripts/test_pysatochip.py                        |   45 +
+ tests/README-satochip-testing.md                  |   82 +
+ tests/conftest.py                                 |  196 +
+ tests/test_satochip_integration.py                | 5125 +++++++++++++++++++++
+ tests/test_satochip_plugin.py                     | 1187 +++++
+ tests/test_satochip_qt_settings.py                |  221 +
+ 29 files changed, 12946 insertions(+), 483 deletions(-)
+
+### Commits Ahead of Upstream (count)
+Count:       17
+
+### Remaining Commits (Toporin/Sander)
+ab563c68e use manifest.json instead of loading init file for plugin registration
+a4a2aca01 Update Satochip plugin
+3400aa330 Remove commented import
+da8c9dc2b Moved Satochip icons from electrum/gui to the satochip plugin folder
+1f6283c57 Patch: electrum.ecc is now a distinct package
+13c7ebbac (minor) correct some PEP8 warnings
+534ccc043 satochip: fixes and error handling
+698756ad9 qt desktop gui: upgrade qt5->qt6
+f12302f60 Remove unnecessary parenthesis in 'if' statements
+0c9acebd4 Satochip plugin: using SeedLayout to import seed in setup Wizard
+302089124 Satochip plugin: improve 2FA UX
+b78c98202 Satochip plugin: clean code
+5fb7f0a86 Clean Satochip plugin code using Flake8 & autopep8
+b0ed67fa7 Satochip: adapt bitcoin.py/transaction.py calls
+a6d1e50da Satochip: correct flake8 issue in __init__.py
+4a42e3158 Satochip: clean code using flake8
+47e7e846d Add Satochip hardware wallet support to Electrum v4.5.4
+
+## Expected Outcome Verification
+- [x] git log -1 shows ab563c68e Toporin commit
+- [x] git diff --cached shows 29 files changed (12946 insertions)
+- [x] git log upstream/master..HEAD shows 17 commits
+
+## Status: SUCCESS

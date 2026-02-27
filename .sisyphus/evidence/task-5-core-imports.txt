@@ -1,0 +1,5 @@
+electrum.keystore: OK
+electrum.plugin: OK
+electrum.wallet: OK
+electrum.wizard: OK
+electrum.hw_wallet.plugin: OK

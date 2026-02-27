@@ -1,0 +1,32 @@
+=== Shell syntax check ===
+PASS: syntax OK
+
+=== GUI/Story 0 documentation in help text ===
+# Run the ordered user story lifecycle test suite against a physical Satochip card
+#   ./scripts/run_user_stories.sh                    # Full suite with GUI observer
+#   ./scripts/run_user_stories.sh --headless          # Full suite without GUI
+#   ./scripts/run_user_stories.sh --no-reset          # Skip factory reset (Story 0)
+#   - Physical Satochip card in reader
+headless=0
+Run the ordered Satochip user story lifecycle test suite against a physical card.
+  Story 0 — TestStory0FactoryReset        (destructive: wipes card)
+  --headless      Run without GUI observer. Automatically skips Story 0 (factory
+                  reset requires physical card interaction with GUI prompts).
+                  Use without --headless to include Story 0.
+  --no-reset      Skip Story 0 (factory reset). Implies card is already set up.
+Note: Story 0 (Factory Reset) requires GUI mode for physical card removal/reinsertion
+      prompts. When --headless is used without --story 0, Story 0 is automatically skipped.
+  - Physical Satochip card in reader
+  ./scripts/run_user_stories.sh --headless
+  ./scripts/run_user_stories.sh --no-reset --headless
+        --headless)
+            headless=1
+# --headless implies --no-reset when Story 0 would run (needs GUI for physical card interaction)
+if [[ $headless -eq 1 && $no_reset -eq 0 && ${#story_filter[@]} -eq 0 ]]; then
+    echo "WARNING: Story 0 requires GUI mode (physical card interaction)."
+    echo "         Use without --headless to include Story 0."
+if [[ $headless -eq 0 ]]; then
+    export SATOCHIP_OBSERVE_GUI=1
+    echo "  SATOCHIP_OBSERVE_GUI=1 (GUI observer enabled)"
+    unset SATOCHIP_OBSERVE_GUI
+    echo "  SATOCHIP_OBSERVE_GUI unset (headless mode)"

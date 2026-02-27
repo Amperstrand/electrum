@@ -1,0 +1,17 @@
+=== Task 1: Helper function signatures ===
+absent: (cc: 'Any', timeout: float = 30.0, app=None) -> bool
+present: (cc: 'Any', timeout: float = 60.0, app=None) -> bool
+reset: (cc: 'Any', status_fn, app=None, timeout_per_step: int = 60) -> bool
+
+=== mode_factory_reset flag management ===
+299:    cc.set_mode_factory_reset(True)
+369:    finally:
+370:        cc.set_mode_factory_reset(False)
+
+=== No existing function modifications ===
+diff --git a/electrum/plugins/satochip/tests/story_helpers.py b/electrum/plugins/satochip/tests/story_helpers.py
+index 63518c938..5820ee93b 100644
+--- a/electrum/plugins/satochip/tests/story_helpers.py
++++ b/electrum/plugins/satochip/tests/story_helpers.py
+@@ -258,3 +258,113 @@ def puk_preflight_check(cc):
+(Only additions — no deletions to existing code)

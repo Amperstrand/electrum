@@ -1,0 +1,14 @@
+=== No subprocess/Podman/GP references ===
+1
+(1 expected — just the docstring comment 'No subprocess/GP tooling is used')
+174:                   (SATOCHIP_OBSERVE_GUI=1).  No subprocess/GP tooling is used.
+
+=== APDU helper used + GUI enforcement ===
+67:    apdu_factory_reset,
+205:            _ = apdu_factory_reset(cc_session, _status, app=app)
+174:                   (SATOCHIP_OBSERVE_GUI=1).  No subprocess/GP tooling is used.
+199:            pytest.skip("Story 0 requires GUI mode (SATOCHIP_OBSERVE_GUI=1)")
+226:                "observe_gui_env": os.environ.get("SATOCHIP_OBSERVE_GUI"),
+
+=== Stories 1-3 untouched ===
+       0

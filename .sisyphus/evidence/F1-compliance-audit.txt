@@ -1,0 +1,208 @@
+F1 - PLAN COMPLIANCE AUDIT
+==========================
+Date: 2026-02-27
+Upstream ref: 69093cc183c2e25cf7e44aa97731b06104c98ca2 (Electrum 4.7.0)
+Plan: satochip-test-relocation.md
+
+================================================================================
+8 KEY CHECKS (from plan F1 task spec)
+================================================================================
+
+CHECK 1: git diff 69093cc18..HEAD --name-only | grep -v '^electrum/plugins/satochip/'
+  Command: git diff 69093cc18..HEAD --name-only | grep -v '^electrum/plugins/satochip/'
+  Output: (empty)
+  Result: PASS — zero output, no changes outside plugin folder
+
+CHECK 2: git diff 69093cc18 -- electrum/gui/qt/util.py
+  Command: git diff 69093cc18 -- electrum/gui/qt/util.py
+  Output: (empty)
+  Result: PASS — byte-identical to upstream
+
+CHECK 3: git diff 69093cc18 -- electrum/gui/qt/wizard/wallet.py
+  Command: git diff 69093cc18 -- electrum/gui/qt/wizard/wallet.py
+  Output: (empty)
+  Result: PASS — byte-identical to upstream
+
+CHECK 4: grep -c 'build_satochip_tooltip|_SatochipCardEventObserver|register_card_event_callback' electrum/plugins/satochip/satochip.py
+  Command: grep -c 'build_satochip_tooltip\|_SatochipCardEventObserver\|register_card_event_callback' electrum/plugins/satochip/satochip.py
+  Output: 0
+  Result: PASS — orphaned symbols removed
+
+CHECK 5: grep 'from typing import' electrum/plugins/satochip/satochip.py
+  Command: grep 'from typing import' electrum/plugins/satochip/satochip.py
+  Output: from typing import Optional
+  Result: PASS — only Optional, no Callable/Dict/List
+
+CHECK 6: grep 'list_pcsc_readers' electrum/plugins/satochip/satochip.py
+  Command: grep 'list_pcsc_readers' electrum/plugins/satochip/satochip.py
+  Output:
+    from smartcard.System import readers as list_pcsc_readers
+            pcsc_readers = list_pcsc_readers()
+  Result: PASS — import and usage preserved
+
+CHECK 7: grep 'SATOCHIP_PLUGIN_REVISION' electrum/plugins/satochip/satochip.py
+  Command: grep 'SATOCHIP_PLUGIN_REVISION' electrum/plugins/satochip/satochip.py
+  Output: SATOCHIP_PLUGIN_REVISION = 'lib0.11.a-plugin0.1'
+  Result: PASS — constant preserved
+
+CHECK 8: Evidence files exist in .sisyphus/evidence/
+  Command: ls .sisyphus/evidence/
+  Output:
+    task-1-backup-created.txt
+    task-1-revert-core-files.txt
+    task-2-stash-clean.txt
+    task-3-soft-reset.txt
+    task-4-noise-removed.txt
+    task-5-debug-stripped.txt
+    task-7-full-verification.txt
+    task-8-push-success.txt
+    F1-compliance-audit.txt  (this file)
+  Result: PASS — evidence directory populated
+
+================================================================================
+MUST HAVE AUDIT (12 items from plan)
+================================================================================
+
+MH1:  Core files byte-identical to upstream 69093cc18
+      PASS — util.py diff: 0 bytes, wallet.py diff: 0 bytes
+
+MH2:  All orphaned tooltip/observer code removed from satochip.py
+      PASS — grep count for 8 orphaned symbols = 0
+
+MH3:  from typing import Optional (not Callable, Dict, List)
+      PASS — "from typing import Optional" (only Optional)
+
+MH4:  No import inspect in satochip.py
+      PASS — grep '^import inspect' → (not found)
+
+MH5:  No import re in satochip.py
+      PASS — grep '^import re' → (not found)
+
+MH6:  No from smartcard.CardMonitoring import CardMonitor, CardObserver
+      PASS — grep 'CardMonitor|CardObserver' → (not found)
+
+MH7:  from smartcard.System import readers as list_pcsc_readers PRESERVED
+      PASS — found 2 occurrences (import + usage)
+
+MH8:  SATOCHIP_PLUGIN_REVISION constant PRESERVED
+      PASS — found 1 occurrence
+
+MH9:  self.device_manager().register_enumerate_func() PRESERVED
+      PASS — found 3 occurrences (register_enumerate_func + detect_smartcard_reader methods)
+
+MH10: tests/conftest.py DELETED
+      PASS — ls tests/conftest.py → No such file or directory
+
+MH11: All test files in electrum/plugins/satochip/tests/
+      PASS — test_satochip_plugin.py: EXISTS
+      PASS — test_satochip_integration.py: EXISTS
+      PASS — test_satochip_qt_settings.py: EXISTS
+
+MH12: tests/test_satochip_*.py DELETED from old location
+      PASS — tests/test_satochip_plugin.py: DELETED
+      PASS — tests/test_satochip_integration.py: DELETED
+      PASS — tests/test_satochip_qt_settings.py: DELETED
+
+Must Have Score: 12/12
+
+================================================================================
+MUST NOT HAVE AUDIT (8 items from plan)
+================================================================================
+
+MNH1: No modifications to tests/__init__.py (shared Electrum infrastructure)
+      PASS — git diff 69093cc18 -- tests/__init__.py → empty
+
+MNH2: No modifications to ANY file outside electrum/plugins/satochip/ (beyond reverts + test deletions)
+      PASS — git diff 69093cc18..HEAD --name-only | grep -v '^electrum/plugins/satochip/' → ZERO lines
+      NOTE: The "Files changed vs upstream" only shows files inside electrum/plugins/satochip/ (14 files),
+            all of which are the new plugin additions — exactly as intended.
+
+MNH3: No changes to test logic — only import paths change
+      PASS — Only import path changes were made (1 line per moved test file)
+
+MNH4: No pytest configuration changes (pyproject.toml, pytest.ini)
+      PASS — No diff for pytest config files vs upstream
+
+MNH5: No changes to qt.py, cmdline.py, manifest.json, __init__.py in the plugin
+      NOTE: These files show "new file mode" diffs against upstream because the entire
+            satochip plugin is our addition (did not exist in Electrum 4.7.0 upstream).
+            The plan rule means "don't modify these as part of this refactoring task",
+            which was respected — none were modified, only the pre-existing satochip.py
+            was cleaned. The tasks (1-7) created zero modifications to qt.py/cmdline.py/
+            manifest.json/__init__.py.
+      PASS — No modifications by tasks 1-7 to these plugin files
+
+MNH6: No removal of list_pcsc_readers import
+      PASS — import present (2 occurrences)
+
+MNH7: No removal of SATOCHIP_PLUGIN_REVISION
+      PASS — constant present (1 occurrence)
+
+MNH8: No removal of _explain_cardconnection_error method
+      PASS — method present (2 occurrences: definition + call site)
+
+Must NOT Have Score: 8/8
+
+================================================================================
+TASK COMPLETION AUDIT (7 implementation tasks)
+================================================================================
+
+Task 1: Revert core files + delete tests/conftest.py
+        PASS — util.py: byte-identical | wallet.py: byte-identical | conftest.py: DELETED
+
+Task 2: Remove orphaned code from satochip.py
+        PASS — all 8 orphaned symbols absent | typing import narrowed to Optional only
+               import inspect: absent | import re: absent | CardMonitor/CardObserver: absent
+
+Task 3: Create tests/ directory scaffold (__init__.py + conftest.py)
+        PASS — electrum/plugins/satochip/tests/__init__.py: EXISTS
+               electrum/plugins/satochip/tests/conftest.py: EXISTS
+
+Task 4: Move + fix test_satochip_plugin.py
+        PASS — new location: EXISTS | old location: DELETED
+
+Task 5: Move + fix test_satochip_integration.py
+        PASS — new location: EXISTS | old location: DELETED
+
+Task 6: Move + fix test_satochip_qt_settings.py
+        PASS — new location: EXISTS | old location: DELETED
+
+Task 7: Move README-satochip-testing.md
+        PASS — new location: EXISTS | old location: DELETED
+
+Tasks Score: 7/7
+
+================================================================================
+SCOPE CONFINEMENT VERIFICATION
+================================================================================
+
+Files changed vs upstream OUTSIDE electrum/plugins/satochip/:
+  (empty — ZERO files)
+
+Files changed vs upstream INSIDE electrum/plugins/satochip/:
+  electrum/plugins/satochip/README.rst                          (new)
+  electrum/plugins/satochip/__init__.py                         (new)
+  electrum/plugins/satochip/cmdline.py                          (new)
+  electrum/plugins/satochip/manifest.json                       (new)
+  electrum/plugins/satochip/qt.py                               (new)
+  electrum/plugins/satochip/satochip.png                        (new)
+  electrum/plugins/satochip/satochip.py                         (new/modified)
+  electrum/plugins/satochip/satochip_unpaired.png               (new)
+  electrum/plugins/satochip/tests/README-satochip-testing.md    (new)
+  electrum/plugins/satochip/tests/__init__.py                   (new)
+  electrum/plugins/satochip/tests/conftest.py                   (new)
+  electrum/plugins/satochip/tests/test_satochip_integration.py  (new)
+  electrum/plugins/satochip/tests/test_satochip_plugin.py       (new)
+  electrum/plugins/satochip/tests/test_satochip_qt_settings.py  (new)
+
+All 14 changed files are inside electrum/plugins/satochip/ — FULLY CONFINED.
+
+================================================================================
+FINAL VERDICT
+================================================================================
+
+Must Have     [12/12]
+Must NOT Have [ 8/ 8]
+Tasks         [ 7/ 7]
+
+VERDICT: APPROVE

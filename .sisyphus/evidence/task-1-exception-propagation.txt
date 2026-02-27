@@ -1,0 +1,4 @@
+Instrumented 1 functions in test_mod
+ENTER failing_func(x=42(int))
+EXCEPTION failing_func → ValueError: ValueError('test error') [0.0000s]
+Exception correctly propagated

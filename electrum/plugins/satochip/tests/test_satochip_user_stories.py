@@ -62,6 +62,9 @@ from electrum.plugins.satochip.tests.story_helpers import (
     record_event,
     require_card_state,
     puk_preflight_check,
+    wait_for_card_absent,
+    wait_for_card_present,
+    apdu_factory_reset,
 )
 
 # ---------------------------------------------------------------------------
@@ -165,10 +168,10 @@ class TestStory0FactoryReset:
 
     Precondition:  Card may be in any state (FACTORY_RESET, INITIALIZED, SEEDED,
                    or PIN_BLOCKED).
-    Action:        Issue a factory-reset command to return the card to a clean
-                   FACTORY_RESET state.  No PIN is required for this operation
-                   when the card is already in PIN_BLOCKED state; otherwise the
-                   current PIN (TESTPIN) is used.
+    Action:        Use APDU-based reset signaling to return the card to a clean
+                   FACTORY_RESET state.  This flow requires physical card
+                   removal/reinsertion cycles and must run in GUI observer mode
+                   (SATOCHIP_OBSERVE_GUI=1).  No subprocess/GP tooling is used.
     Postcondition: Card is in FACTORY_RESET state — setup_done=False,
                    is_seeded=False, PIN tries restored to maximum.
 
@@ -177,12 +180,8 @@ class TestStory0FactoryReset:
     """
 
     def test_factory_reset_card(self, cc_session: Any, story_artifact_root: Path):
-        import subprocess
-        import sys
+        import os
         import time
-        from pathlib import Path
-
-        _ = (TESTPIN, TESTPUK, HUNGRY_MNEMONIC, require_card_state, puk_preflight_check)
 
         PREFIX = "story-0-factory-reset"
         artifacts = StoryArtifacts(cast(Path, story_artifact_root), PREFIX)
@@ -193,95 +192,68 @@ class TestStory0FactoryReset:
         def _status(text: str, shot_name: str | None = None) -> None:
             set_status(text, shot_name, PREFIX, widget, status_label, app, artifacts.screenshot_dir, observe_gui)
 
+        _ = (require_card_state, wait_for_card_absent)
+
+        if not observe_gui:
+            _cascade_skip["story_0"] = "SKIPPED: GUI required for APDU reset"
+            pytest.skip("Story 0 requires GUI mode (SATOCHIP_OBSERVE_GUI=1)")
+
         _status("Starting factory reset...", "00_start")
 
-        script_path = Path(__file__).resolve().parents[4] / "scripts" / "remote_card_audit_reset.py"
-        if not script_path.exists():
-            _cascade_skip["story_0"] = "FAILED: reset script not found"
-            pytest.fail(f"remote_card_audit_reset.py not found at {script_path}")
-
-        _status(f"Running {script_path.name}...", "01_subprocess_start")
-
+        _status("Running APDU factory-reset flow...", "01_apdu_start")
         try:
-            podman_check = subprocess.run(
-                ["podman", "machine", "info"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if podman_check.returncode != 0:
-                pytest.skip("Podman VM not available - cannot run factory reset")
-
-            vm_ssh_check = subprocess.run(
-                ["podman", "machine", "ssh", "regtest", "true"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if vm_ssh_check.returncode != 0:
-                pytest.skip("Podman machine SSH unavailable - cannot run factory reset")
-        except FileNotFoundError:
-            pytest.skip("podman command not found - cannot run factory reset")
-        except subprocess.TimeoutExpired:
-            pytest.skip("podman preflight timed out - VM may not be running")
-
-        try:
-            result = subprocess.run(
-                [sys.executable, str(script_path)],
-                input="y\ny\n",
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired as exc:
-            _cascade_skip["story_0"] = "FAILED: subprocess timed out after 120s"
+            _ = apdu_factory_reset(cc_session, _status, app=app)
+        except RuntimeError as exc:
+            _cascade_skip["story_0"] = f"FAILED: {exc}"
+            _status(f"FAILED: {exc}", "03_failed")
             record_event(
                 {
-                    "event": "factory_reset_subprocess",
-                    "status": "timeout",
-                    "stdout": exc.stdout or "",
-                    "stderr": exc.stderr or "",
+                    "event": "factory_reset_apdu",
+                    "status": "failed",
+                    "error": str(exc),
                 },
                 artifacts.log_path,
                 events,
             )
-            raise
+            pytest.fail(str(exc))
 
-        _status(f"Subprocess exited with code {result.returncode}", "02_subprocess_done")
+        _status("APDU reset flow complete", "02_apdu_done")
 
-        short_stdout = result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout
-        short_stderr = result.stderr[-2000:] if len(result.stderr) > 2000 else result.stderr
         record_event(
             {
-                "event": "factory_reset_subprocess",
-                "returncode": result.returncode,
-                "stdout": short_stdout,
-                "stderr": short_stderr,
+                "event": "factory_reset_apdu",
+                "status": "ok",
+                "observe_gui_env": os.environ.get("SATOCHIP_OBSERVE_GUI"),
             },
             artifacts.log_path,
             events,
         )
 
-        if result.returncode != 0:
-            error_blob = f"{result.stdout}\n{result.stderr}".lower()
-            if "podman machine ssh" in error_blob or "connection refused" in error_blob or "operation timed out" in error_blob:
-                pytest.skip("Podman/SSH unavailable for factory reset")
-            _cascade_skip["story_0"] = f"FAILED: subprocess returned {result.returncode}"
-            _status(f"FAILED: exit code {result.returncode}", "03_failed")
-            pytest.fail(f"remote_card_audit_reset.py failed (exit {result.returncode}):\n{result.stderr[-500:]}")
-
         _status("Verifying card is factory-reset...", "04_verify_blank")
+        if not wait_for_card_present(cc_session, timeout=30, app=app):
+            _cascade_skip["story_0"] = "FAILED: timed out waiting for card reconnection"
+            _status("FAILED: card did not reconnect", "03_failed_reconnect")
+            record_event(
+                {
+                    "event": "factory_reset_verification",
+                    "status": "failed",
+                    "error": "Timed out waiting for card reconnection after APDU reset",
+                },
+                artifacts.log_path,
+                events,
+            )
+            pytest.fail("Timed out waiting for card reconnection after APDU reset")
+
+        time.sleep(2.0)
         try:
-            status_response = cast(tuple[Any, int, int, dict[str, Any]], cc_session.card_get_status())
-            _, sw1, sw2, status_dict = status_response
+            (_, sw1, sw2, status_dict) = cc_session.card_get_status()
         except Exception:
             time.sleep(2)
             try:
                 cc_session.card_initiate_secure_channel()
             except Exception:
                 pass
-            status_response = cast(tuple[Any, int, int, dict[str, Any]], cc_session.card_get_status())
-            _, sw1, sw2, status_dict = status_response
+            (_, sw1, sw2, status_dict) = cc_session.card_get_status()
 
         setup_done = status_dict.get("setup_done", "UNKNOWN")
         record_event(

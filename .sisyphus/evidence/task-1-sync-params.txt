@@ -1,0 +1,4 @@
+Instrumented 1 functions in test_mod
+ENTER sample_func(name=alice(str), count=42(int), data=bytes(4): deadbeef(bytes))
+EXIT  sample_func → 'hello alice'(str) [0.0000s]
+Result: hello alice

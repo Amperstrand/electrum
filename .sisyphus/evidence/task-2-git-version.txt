@@ -1,0 +1,2 @@
+Git version: 4.7.0-23-g692faa8f9-dirty
+GIT VERSION CHECK PASSED

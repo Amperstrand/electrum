@@ -1,0 +1,64 @@
+=== Total commit count ===
+      20
+=== Bottom 17 commits unchanged ===
+=== Top 3 commits are amperstand's ===
+amperstand
+=== No agent debug code ===
+=== No noise files in tree ===
+electrum/scripts/README.md
+electrum/scripts/bip39_recovery.py
+electrum/scripts/block_headers.py
+electrum/scripts/bruteforce_pw.py
+electrum/scripts/estimate_fee.py
+electrum/scripts/get_history.py
+electrum/scripts/ln_features.py
+electrum/scripts/peers.py
+electrum/scripts/quick_start.py
+electrum/scripts/servers.py
+electrum/scripts/txbroadcast.py
+electrum/scripts/txradar.py
+electrum/scripts/update_default_servers.py
+electrum/scripts/watch_address.py
+=== Expected files present ===
+electrum/plugins/satochip/README.rst
+electrum/plugins/satochip/__init__.py
+electrum/plugins/satochip/cmdline.py
+electrum/plugins/satochip/manifest.json
+electrum/plugins/satochip/qt.py
+electrum/plugins/satochip/satochip.png
+electrum/plugins/satochip/satochip.py
+electrum/plugins/satochip/satochip_unpaired.png
+=== Tests present ===
+tests/conftest.py
+tests/test_satochip_integration.py
+tests/test_satochip_plugin.py
+tests/test_satochip_qt_settings.py
+=== wallet.py change included ===
+=== No Made-with trailers ===
+0
+=== Compare trees (should only differ by removed noise + debug code) ===
+106d105
+< contrib/dev/Dockerfile.satochip
+159,161d157
+< docs/coldcard_flow.md
+< docs/hardware_wallet_comparison.md
+< docs/satochip_flow.md
+707d702
+< electrum/plugins/satochip/satochip_card_states.md
+795d789
+< electrum_hardware_wallet_plugins_analysis.md
+819,830d812
+< satochip_pysatochip_integration.md
+< scripts/build_dev_image.sh
+< scripts/detect_satochip_family_card.py
+< scripts/generate_satochip_flow.py
+< scripts/remote_card_audit_reset.py
+< scripts/run_dev.sh
+< scripts/run_electrum_docker.sh
+< scripts/run_electrum_remote.sh
+< scripts/run_in_docker.sh
+< scripts/setup_remote_pcscd.sh
+< scripts/test_card_raw.py
+< scripts/test_pysatochip.py
+833d814
+< tests/README-satochip-testing.md
