@@ -34,6 +34,10 @@ def pytest_configure(config):
         "markers",
         "destructive_card: intentionally modifies or blocks card state; disabled by default"
     )
+    config.addinivalue_line(
+        "markers",
+        "user_story: end-to-end user story test; only runs with --run-user-stories"
+    )
 
 
 def pytest_addoption(parser):
@@ -42,6 +46,12 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="run tests marked destructive_card (can block/reset test card)",
+    )
+    parser.addoption(
+        "--run-user-stories",
+        action="store_true",
+        default=False,
+        help="run end-to-end user story tests (requires real Satochip hardware)",
     )
 
 
@@ -215,3 +225,100 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "destructive_card" in item.keywords:
                 item.add_marker(skip_destructive)
+
+    if not config.getoption("--run-user-stories"):
+        skip_user_story = pytest.mark.skip(
+            reason="user story test disabled (use --run-user-stories)"
+        )
+        for item in items:
+            if "user_story" in item.keywords:
+                item.add_marker(skip_user_story)
+
+
+# =============================================================================
+# Session-Scoped Live Card Fixtures
+# =============================================================================
+
+
+class _DummyCardClient:
+    """Minimal pysatochip client stub for CardConnector.
+
+    CardConnector calls back into its client for UI operations
+    (PIN prompts, error display, etc.).  This stub silently
+    ignores all such callbacks so tests can run headlessly.
+    """
+    def request(self, req_type, *args):
+        return None
+
+
+@pytest.fixture(scope="session")
+def cc_session(request):
+    """
+    Session-scoped fixture: a real pysatochip CardConnector talking to the
+    remote Satochip via the SSH tunnel pcscd socket.
+
+    Mirrors cc_live (module-scoped) but lives for the entire test session,
+    shared across all user story tests.
+
+    Prerequisites (run inside dev container or Podman VM):
+      - PCSCLITE_CSOCK_NAME=/run/pcscd/pcscd.comm  (or /tmp/pcscd-smoke.comm)
+      - SSH tunnel to remote Satochip established
+
+    Yields the connected CardConnector.  Disconnects on teardown.
+    Skips all dependent tests if no socket / card is reachable.
+    """
+    import logging
+
+    # Ensure the pcscd socket env var is set
+    if "PCSCLITE_CSOCK_NAME" not in os.environ:
+        for candidate in ("/run/pcscd/pcscd.comm", "/tmp/pcscd-smoke.comm"):
+            if os.path.exists(candidate):
+                os.environ["PCSCLITE_CSOCK_NAME"] = candidate
+                break
+
+    if not has_remote_pcscd():
+        pytest.skip("Remote pcscd socket not available — start the SSH tunnel first")
+
+    try:
+        from pysatochip.CardConnector import CardConnector
+    except ImportError:
+        pytest.skip("pysatochip not installed")
+
+    cc = None
+    try:
+        cc = CardConnector(_DummyCardClient(), logging.WARNING)
+        import time
+        for _attempt in range(5):
+            try:
+                _, sw1, sw2, _ = cc.card_get_status()
+                if (sw1, sw2) == (0x90, 0x00):
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+        if getattr(cc, 'needs_secure_channel', False):
+            try:
+                cc.card_initiate_secure_channel()
+            except Exception:
+                pass  # Already initialized by CardObserver; ignore.
+        yield cc
+    finally:
+        if cc is not None:
+            try:
+                cc.card_disconnect()
+            except Exception:
+                pass
+
+
+@pytest.fixture(scope="session")
+def story_artifact_root(tmp_path_factory):
+    """
+    Session-scoped fixture that creates a timestamped artifact directory
+    for user story test outputs (logs, screenshots, exported wallets, etc.).
+
+    Returns the Path to the created directory.
+    """
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    artifact_dir = tmp_path_factory.mktemp(f"satochip_user_stories_{timestamp}", numbered=False)
+    return artifact_dir
