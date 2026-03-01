@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 # =============================================================================
 
 def pytest_configure(config):
-    """Register custom pytest markers."""
+    """Register custom pytest markers and load pcsc_remote_patch for macOS."""
     config.addinivalue_line(
         "markers",
         "integration: integration test requiring real Satochip hardware over remote pcscd"
@@ -38,6 +38,27 @@ def pytest_configure(config):
         "markers",
         "user_story: end-to-end user story test; only runs with --run-user-stories"
     )
+    
+    # Load pcsc_remote_patch for macOS if remote socket is configured
+    # This must happen before any pyscard/pysatochip imports
+    socket_path = os.environ.get("PCSCLITE_CSOCK_NAME")
+    if not socket_path:
+        for candidate in ("/tmp/pcscd-remote.comm", "/tmp/pcscd-smoke.comm", "/run/pcscd/pcscd.comm"):
+            if os.path.exists(candidate):
+                os.environ["PCSCLITE_CSOCK_NAME"] = candidate
+                break
+    
+    if os.environ.get("PCSCLITE_CSOCK_NAME") and os.path.exists(os.environ["PCSCLITE_CSOCK_NAME"]):
+        try:
+            import sys
+            from pathlib import Path
+            _utils_path = Path(__file__).parent.parent.parent.parent.parent / "Satochip-Utils"
+            if str(_utils_path) not in sys.path:
+                sys.path.insert(0, str(_utils_path))
+            import pcsc_remote_patch  # noqa: F401
+        except ImportError:
+            pass  # Patch not available, continue without it
+
 
 
 def pytest_addoption(parser):
@@ -271,7 +292,7 @@ def cc_session(request):
 
     # Ensure the pcscd socket env var is set
     if "PCSCLITE_CSOCK_NAME" not in os.environ:
-        for candidate in ("/run/pcscd/pcscd.comm", "/tmp/pcscd-smoke.comm"):
+        for candidate in ("/tmp/pcscd-remote.comm", "/run/pcscd/pcscd.comm", "/tmp/pcscd-smoke.comm"):
             if os.path.exists(candidate):
                 os.environ["PCSCLITE_CSOCK_NAME"] = candidate
                 break
