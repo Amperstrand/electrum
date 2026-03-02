@@ -309,7 +309,7 @@ Max Concurrent: 3 (Waves 1 & 2)
 
   **Commit**: YES (groups with Tasks 1, 2)
 
-- [ ] 4. Create story_0_factory_reset.feature Gherkin file
+- [x] 4. Create story_0_factory_reset.feature Gherkin file
 
   **What to do**:
   - Create `electrum/plugins/satochip/tests/features/story_0_factory_reset.feature`
@@ -396,7 +396,7 @@ Max Concurrent: 3 (Waves 1 & 2)
   **Commit**: YES (groups with Tasks 5, 6)
   - Message: `feat(satochip): add BDD user story framework with Story 0 factory reset`
 
-- [ ] 5. Create features/conftest.py with BDD fixtures and Allure hooks
+- [x] 5. Create features/conftest.py with BDD fixtures and Allure hooks
 
   **What to do**:
   - Create `electrum/plugins/satochip/tests/features/conftest.py`
@@ -468,7 +468,7 @@ Max Concurrent: 3 (Waves 1 & 2)
   **Commit**: YES (groups with Tasks 4, 6)
   - Message: `feat(satochip): add BDD user story framework with Story 0 factory reset`
 
-- [ ] 6. Create test_bdd_user_stories.py with step definitions
+- [x] 6. Create test_bdd_user_stories.py with step definitions
 
   **What to do**:
   - Create `electrum/plugins/satochip/tests/test_bdd_user_stories.py`
