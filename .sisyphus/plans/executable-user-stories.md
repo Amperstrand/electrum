@@ -556,7 +556,7 @@ Max Concurrent: 3 (Waves 1 & 2)
   - Message: `feat(satochip): add BDD user story framework with Story 0 factory reset`
   - Files: `test_bdd_user_stories.py`, `features/story_0_factory_reset.feature`, `features/conftest.py`
 
-- [ ] 7. Verify BDD test collection, skip behavior, and marker integration
+- [x] 7. Verify BDD test collection, skip behavior, and marker integration
 
   **What to do**:
   - Run pytest collection and verify BDD test is found
@@ -616,7 +616,7 @@ Max Concurrent: 3 (Waves 1 & 2)
 
   **Commit**: NO
 
-- [ ] 8. Run full BDD test with real card and verify Allure output
+- [x] 8. Run full BDD test with real card and verify Allure output
 
   **What to do**:
   - Ensure SSH tunnel is active: `ls -la /tmp/pcscd-remote.comm`

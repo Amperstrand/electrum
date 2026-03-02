@@ -1,0 +1,23 @@
+Task 7: Verify BDD Test Collection, Skip Behavior, Marker Integration
+Date: $(date -Iseconds)
+
+VERIFICATION RESULTS:
+
+1. Test collects with --run-user-stories: ✅
+   - test_bdd_user_stories.py::test_factory_reset_card found in collection
+
+2. Test skipped without --run-user-stories: ✅
+   - Runtime: SKIPPED [100%]
+
+3. Existing tests still collect: ✅
+   - test_satochip_user_stories.py::TestStory0FactoryReset::test_factory_reset_card
+   - test_satochip_user_stories.py::TestStory1WalletSetupAndSign::test_wallet_setup_and_sign
+   - test_satochip_user_stories.py::TestStory2WrongPinUntilBlock::test_wrong_pin_until_block
+   - test_satochip_user_stories.py::TestStory3PukRecoveryAndVerify::test_puk_recovery_and_verify
+   - test_bdd_user_stories.py::test_factory_reset_card (NEW)
+
+4. @pytest.mark.user_story marker: ✅
+   - Marker defined in test file
+   - Gating works via pytest_collection_modifyitems
+
+TOTAL TESTS COLLECTED: 272 (including new BDD test)
