@@ -1,6 +1,6 @@
 import os
-import logging
 from datetime import datetime, timezone
+from electrum.logging import get_logger
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -9,8 +9,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.x509.oid import NameOID
 
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = get_logger(__name__)
 
 # Map cryptography NameOIDs to the short names returned by OpenSSL get_components()
 _OID_TO_SHORT = {
@@ -26,8 +25,7 @@ _OID_TO_SHORT = {
 
 
 class CertificateValidator:
-    def __init__(self, loglevel=logging.WARNING):
-        logger.setLevel(loglevel)
+    def __init__(self):
         logger.debug("In __init__")
 
     def validate_certificate_chain(self, device_pem, device_type):

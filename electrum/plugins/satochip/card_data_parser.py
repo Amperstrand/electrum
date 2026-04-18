@@ -20,7 +20,6 @@
 Inlined from pysatochip/CardDataParser.py with Electrum-native dependencies.
 """
 
-import logging
 import base64
 from hashlib import sha256
 from struct import pack
@@ -38,28 +37,11 @@ from electrum_ecc import (
 from .jc_constants import (
     SIZE_ECCOORDX,
     SIZE_ENTROPY,
-    SIZE_KEY_METADATA,
-    SIZE_SLIP44,
-    SIZE_CONTRACT,
-    SIZE_TOKENID,
-    SIZE_DATA,
-    DIC_STATE,
-    DIC_ASSET_BY_CODE,
-    TOKEN_RANGE,
-    NFT_RANGE,
 )
 
-# Inlined from pysatochip/slip44.py
-DICT_SLIP44_BY_CODE = {
-    0x80000000: "BTC",
-    0x80000002: "LTC",
-    0x80000009: "XCP",
-    0x8000003C: "ETH",
-    0x80000091: "BCH",
-}
+from electrum.logging import get_logger
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger = get_logger(__name__)
 
 MSG_WARNING = (
     "Before you request bitcoins to be sent to addresses in this "
@@ -70,8 +52,7 @@ MSG_WARNING = (
 
 
 class CardDataParser:
-    def __init__(self, loglevel=logging.WARNING):
-        logger.setLevel(loglevel)
+    def __init__(self):
         logger.debug("In __init__")
         self.authentikey = None
         self.authentikey_coordx = None
@@ -547,66 +528,6 @@ class CardDataParser:
         return sigout
 
     #################################
-    #                  SEEDKEEPER              #
-    #################################
-
-    def parse_seedkeeper_header(self, response):
-        # parse header
-        header_dict = {}
-        if len(response) < 12:
-            logger.error(
-                f"SeedKeeper error: header response too short: {len(response)}"
-            )
-            return header_dict
-
-        header_dict["id"] = (response[0] << 8) + response[1]
-        header_dict["type"] = response[2]
-        header_dict["subtype"] = response[12]
-        header_dict["origin"] = response[3]
-        header_dict["export_rights"] = response[4]
-        header_dict["export_nbplain"] = response[5]
-        header_dict["export_nbsecure"] = response[6]
-        header_dict["export_counter"] = response[7]
-        header_dict["fingerprint_list"] = response[8:12]
-        header_dict["fingerprint"] = bytes(header_dict["fingerprint_list"]).hex()
-        header_dict["rfu1"] = response[12]
-        header_dict["rfu2"] = response[13]
-        header_dict["label_size"] = response[14]
-        if len(response) < (15 + header_dict["label_size"]):
-            logger.error(
-                f"SeedKeeper error: header response too short: {len(response)}"
-            )
-            return header_dict
-
-        header_dict["label_list"] = response[15 : (15 + header_dict["label_size"])]
-        try:
-            header_dict["label"] = bytes(header_dict["label_list"]).decode("utf-8")
-        except UnicodeDecodeError as e:
-            logger.warning("UnicodeDecodeError while decoding label header!")
-            header_dict["label"] = str(bytes(header_dict["label_list"]))
-        header_dict["header_list"] = response[0 : (15 + header_dict["label_size"])]
-        header_dict["header"] = bytes(header_dict["header_list"]).hex()
-
-        return header_dict
-
-    def parse_seedkeeper_log(self, log):
-        LOG_SIZE = 7
-        if len(log) < LOG_SIZE:
-            logger.error(
-                f"Log record has the wrong lenght {len(log)}, should be {LOG_SIZE}"
-            )
-            raise Exception(
-                f"Log record has the wrong lenght {len(log)}, should be {LOG_SIZE}"
-            )
-
-        ins = log[0]
-        id1 = log[1] * 256 + log[2]
-        id2 = log[3] * 256 + log[4]
-        res = log[5] * 256 + log[6]
-
-        return (ins, id1, id2, res)
-
-    #################################
     #                   PERSO PKI                 #
     #################################
 
@@ -620,250 +541,3 @@ class CardDataParser:
         cert_pem += "\r\n-----END CERTIFICATE-----"
         return cert_pem
 
-    def verify_challenge_response_pki(self, response, challenge_from_host, pubkey):
-        logger.debug("In verify_challenge_response_pki")
-
-        # parse response
-        challenge_from_device = bytes(response[0:32])
-        sig_size = ((response[32] & 0xFF) << 8) + (response[33] & 0xFF)
-        sig = bytes(response[34 : (34 + sig_size)])
-        challenge = (
-            "Challenge:".encode("utf-8") + challenge_from_device + challenge_from_host
-        )
-        logger.debug("challenge: " + challenge.hex())
-
-        # hash the challenge
-        msg_hash = sha256(challenge).digest()
-
-        # parse pubkey & verify sig using electrum_ecc
-        try:
-            pk = ECPubkey(b"\x04" + bytes(pubkey))
-        except Exception:
-            return False, "Invalid X9.62 encoding of the public key: " + bytes(
-                pubkey
-            ).hex()
-
-        try:
-            sig64 = ecdsa_sig64_from_der_sig(sig)
-            if not pk.ecdsa_verify(sig64, msg_hash):
-                return False, "Bad signature during challenge response!"
-            return True, ""
-        except Exception:
-            return False, "Bad signature during challenge response!"
-
-    #################################
-    #                    SATODIME                 #
-    #################################
-
-    def parse_satodime_get_keyslot_status(self, response):
-        # response: [ key_status(1b) | key_type(1b) | key_asset(1b) | key_slip44(4b) | key_contract(34b) | key_tokenid(34b) | key_data(66b) ]
-        status_size = len(response)
-        if status_size < SIZE_KEY_METADATA:
-            raise Exception(
-                f"Satodime error: wrong keyslot status response length {status_size}, expected {SIZE_KEY_METADATA}"
-            )
-        offset = 0
-        key_status = response[offset]
-        offset += 1
-        key_type = response[offset]
-        offset += 1
-        key_asset = response[offset]
-        offset += 1
-        key_slip44 = response[offset : (offset + SIZE_SLIP44)]
-        offset += SIZE_SLIP44
-        key_contract = response[offset : (offset + SIZE_CONTRACT)]
-        offset += SIZE_CONTRACT
-        key_tokenid = response[offset : (offset + SIZE_TOKENID)]
-        offset += SIZE_TOKENID
-        key_data = response[offset : (offset + SIZE_DATA)]
-        offset += SIZE_DATA
-
-        # also convert to txt/hex values
-        key_status_txt = DIC_STATE.get(key_status, f"Unknown code {key_status}")
-        key_asset_txt = DIC_ASSET_BY_CODE.get(key_asset, f"Unknown code {key_asset}")
-        key_slip44_hex = bytes(key_slip44).hex()
-        key_slip44_txt = DICT_SLIP44_BY_CODE.get(
-            int.from_bytes(key_slip44, "big"), f"Unknown code {key_slip44}"
-        )
-        size_contract = key_contract[1]
-        key_contract_hex = "0x" + bytes(key_contract[2 : (2 + size_contract)]).hex()
-        size_tokenid = key_tokenid[1]
-        key_tokenid_bytes = bytes(key_tokenid[2 : (2 + size_tokenid)])
-        key_tokenid_hex = "0x" + key_tokenid_bytes.hex()
-        key_tokenid_int = int.from_bytes(key_tokenid_bytes, "big")
-
-        size_data = key_data[1]
-        key_data_txt = bytes(key_data[2 : (2 + size_data)]).decode("utf-8")
-
-        # token/nft
-        is_token = False
-        is_nft = False
-        if key_asset >= TOKEN_RANGE[0] and key_asset < TOKEN_RANGE[1]:
-            is_token = True
-        if key_asset >= NFT_RANGE[0] and key_asset < NFT_RANGE[1]:
-            is_nft = True
-
-        keyslot_status = {
-            "key_status": key_status,
-            "key_type": key_type,
-            "key_asset": key_asset,
-            "key_slip44": key_slip44,
-            "key_contract": key_contract,
-            "key_tokenid": key_tokenid,
-            "key_data": key_data,
-            "key_status_txt": key_status_txt,
-            "key_asset_txt": key_asset_txt,
-            "key_slip44_hex": key_slip44_hex,
-            "key_slip44_txt": key_slip44_txt,
-            "key_contract_hex": key_contract_hex,
-            "key_tokenid_hex": key_tokenid_hex,
-            "key_tokenid_int": key_tokenid_int,
-            "key_data_txt": key_data_txt,
-            "is_token": is_token,
-            "is_nft": is_nft,
-        }
-
-        return keyslot_status
-
-    def parse_satodime_get_pubkey(self, response):
-        # response= [ pubkey_size(2b) | pubkey | sig_size(2b) | sig ]
-        response_size = len(response)
-        offset = 0
-        remain = response_size
-
-        # pubkey
-        if remain < 2:
-            raise Exception(
-                f"Satodime error: wrong get_pubkey response length {response_size}, expected at least {2}"
-            )
-        pubkey_size = response[0] * 256 + response[1]
-        offset += 2
-        remain -= 2
-        if remain < pubkey_size:
-            raise Exception(
-                f"Satodime error: wrong get_pubkey response length {response_size}, expected at least {2 + pubkey_size}"
-            )
-        pubkey_list = response[offset : (offset + pubkey_size)]
-        offset += pubkey_size
-        remain -= pubkey_size
-        # sig
-        if remain < 2:
-            raise Exception(
-                f"Satodime error: wrong get_pubkey response length {response_size}, expected at least {2 + pubkey_size + 2}"
-            )
-        sig_size = response[offset] * 256 + response[offset + 1]
-        offset += 2
-        remain -= 2
-        if remain < sig_size:
-            raise Exception(
-                f"Satodime error: wrong get_pubkey response length {response_size}, expected at least {2 + pubkey_size + 2 + sig_size}"
-            )
-        sig_list = response[offset : (offset + sig_size)]
-        offset += sig_size
-        remain -= sig_size
-
-        # check signature
-        pubkey_hex = bytes(pubkey_list).hex()
-        logger.debug(
-            f"Verifying sig for pubkey {pubkey_hex} using authentikey {self.authentikey.get_public_key_bytes(compressed=False).hex()}"
-        )
-        self.verify_signature(
-            response[0 : (2 + pubkey_size)], sig_list, self.authentikey
-        )
-
-        # compressed key
-        parity = pubkey_list[64] % 2
-        pubkey_comp_list = pubkey_list[0:33]
-        pubkey_comp_list[0] = 0x02 if (parity == 0) else 0x03
-        return (pubkey_list, pubkey_comp_list, sig_list)
-
-    def parse_satodime_get_privkey(self, response, key_nbr):
-        # return: [ entropy_size(2b) | user_entropy + authentikey_coordx + card_entropy | privkey_size(2b) | privkey | sig_size(2b) | sig ]
-        response_size = len(response)
-        offset = 0
-        remain = response_size
-
-        # entropy_size
-        if remain < 2:
-            raise Exception(
-                f"Satodime error: wrong get_privkey response length {response_size}, expected at least {2}"
-            )
-        entropy_size = response[0] * 256 + response[1]
-        offset += 2
-        remain -= 2
-        if remain < entropy_size:
-            raise Exception(
-                f"Satodime error: wrong get_privkey response length {response_size}, expected at least {2 + entropy_size}"
-            )
-        entropy_list = response[
-            offset : (offset + SIZE_ENTROPY + SIZE_ECCOORDX + SIZE_ENTROPY)
-        ]
-        entropy_user = response[offset : (offset + SIZE_ENTROPY)]
-        offset += SIZE_ENTROPY
-        remain -= SIZE_ENTROPY
-        entropy_coordx = response[offset : (offset + SIZE_ECCOORDX)]
-        offset += SIZE_ECCOORDX
-        remain -= SIZE_ECCOORDX
-        entropy_card = response[offset : (offset + SIZE_ENTROPY)]
-        offset += SIZE_ENTROPY
-        remain -= SIZE_ENTROPY
-
-        # privkey
-        if remain < 2:
-            raise Exception(
-                f"Satodime error: wrong get_privkey response length {response_size}, expected at least {2 + entropy_size + 2}"
-            )
-        privkey_size = response[offset] * 256 + response[offset + 1]
-        offset += 2
-        remain -= 2
-        if remain < privkey_size:
-            raise Exception(
-                f"Satodime error: wrong get_privkey response length {response_size}, expected at least {2 + entropy_size + 2 + privkey_size}"
-            )
-        privkey_list = response[offset : (offset + privkey_size)]
-        offset += privkey_size
-        remain -= privkey_size
-        # sig
-        if remain < 2:
-            raise Exception(
-                f"Satodime error: wrong get_privkey response length {response_size}, expected at least {2 + entropy_size + 2 + privkey_size + 2}"
-            )
-        sig_size = response[offset] * 256 + response[offset + 1]
-        offset += 2
-        remain -= 2
-        if remain < sig_size:
-            raise Exception(
-                f"Satodime error: wrong get_privkey response length {response_size}, expected at least {2 + entropy_size + 2 + privkey_size + 2 + sig_size}"
-            )
-        sig_list = response[offset : (offset + sig_size)]
-        offset += sig_size
-        remain -= sig_size
-
-        # check signature
-        self.verify_signature(
-            response[0 : (2 + entropy_size + 2 + privkey_size)],
-            sig_list,
-            self.authentikey,
-        )
-
-        # check that entropy_coordx correspond to authentikey_coordx
-        if entropy_coordx != self.authentikey_coordx:
-            raise Exception(
-                f"Satodime error: entropy_coordx {bytes(entropy_coordx).hex()} for keyslot {key_nbr} does not match authentikey_coordx {bytes(self.authentikey_coordx).hex()}"
-            )
-
-        # check that privkey is correctly derived from entropy:
-        digest = sha256()
-        digest.update(bytes(entropy_list))
-        entropy_hash_bytes = digest.digest()
-        if list(entropy_hash_bytes) != privkey_list:
-            logger.debug("####### DEBUG ENTROPY => PRIVKEY #######")
-            logger.debug(f"entropy_list: {bytes(entropy_list).hex()}")
-            logger.debug(f"entropy_hash_bytes: {bytes(entropy_hash_bytes).hex()}")
-            logger.debug(f"privkey_list: {bytes(privkey_list).hex()}")
-            logger.debug("####### ######################### #######")
-            raise Exception(
-                f"Satodime error: recovered private key for keyslot {key_nbr} does not match entropy!"
-            )
-
-        return (entropy_list, privkey_list, sig_list)

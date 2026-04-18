@@ -5,8 +5,8 @@ using Electrum-native crypto primitives (electrum_ecc + cryptography).
 """
 
 import hmac
-import logging
 from hashlib import sha1
+from electrum.logging import get_logger
 from os import urandom
 
 from electrum_ecc import ECPrivkey, ECPubkey
@@ -15,13 +15,11 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as crypto_padding
 
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = get_logger(__name__)
 
 
 class SecureChannel:
-    def __init__(self, loglevel=logging.WARNING):
-        logger.setLevel(loglevel)
+    def __init__(self):
         logger.debug("In __init__")
         self.initialized_secure_channel = False
         self.sc_privkey = None

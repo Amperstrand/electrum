@@ -35,12 +35,11 @@ from electrum.bitcoin import EncodeBase58Check
 import hashlib
 import hmac as hmac_mod
 import base64
-import logging
 from os import urandom
+from electrum.logging import get_logger
 from typing import Union, List, Optional
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger = get_logger(__name__)
 
 MSG_WARNING = (
     "Before you request coins to be sent to addresses in this "
@@ -233,12 +232,10 @@ class CardConnector:
     SELECT = [0x00, 0xA4, 0x04, 0x00]
     SATOCHIP_AID = [0x53, 0x61, 0x74, 0x6F, 0x43, 0x68, 0x69, 0x70]  # SatoChip
 
-    def __init__(self, client=None, loglevel=logging.WARNING, card_filter=None):
-        logger.setLevel(loglevel)
-        logger.info(f"Logging set to level: {str(loglevel)}")
+    def __init__(self, client=None, card_filter=None):
         logger.debug("In __init__")
         self.logger = logger
-        self.parser = CardDataParser(loglevel)
+        self.parser = CardDataParser()
         self.client = client
         if self.client is not None:
             self.client.cc = self
@@ -2124,12 +2121,6 @@ class CardError(Exception):
 
 class CardNotPresentError(Exception):
     """Raised when the device is not present"""
-
-    pass
-
-
-class SeedKeeperError(Exception):
-    """Raised when an error is returned by the SeedKeeper"""
 
     pass
 
