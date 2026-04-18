@@ -9,35 +9,16 @@ from smartcard.CardConnectionObserver import CardConnectionObserver
 from smartcard.CardMonitoring import CardMonitor, CardObserver
 from smartcard.Exceptions import CardConnectionException, CardRequestTimeoutException
 from smartcard.util import toHexString, toBytes
-from smartcard.sw.SWExceptions import SWException
 
-from .jc_constants import (
-    JCconstants,
-    SEEDKEEPER_DIC_TYPE,
-    SEEDKEEPER_DIC_EXPORT_RIGHTS,
-    SIZE_UNLOCK_SECRET,
-    SIZE_UNLOCK_COUNTER,
-    SIZE_UNLOCK_CODE,
-    SIZE_ENTROPY,
-    SIZE_SLIP44,
-    SIZE_CONTRACT,
-    SIZE_TOKENID,
-    SIZE_DATA,
-)
+from .jc_constants import JCconstants
 from .card_data_parser import CardDataParser
 from .tx_parser import TxParser
 from .secure_channel import SecureChannel
-from .certificate_validator import CertificateValidator
-from electrum_ecc import ECPubkey, ECPrivkey
-from electrum.crypto import sha256d, hash_160
-from electrum.bitcoin import EncodeBase58Check
+from electrum_ecc import ECPubkey
+from electrum.crypto import sha256d
 
 import hashlib
-import hmac as hmac_mod
-import base64
-from os import urandom
 from electrum.logging import get_logger
-from typing import Union, List, Optional
 
 logger = get_logger(__name__)
 
@@ -47,38 +28,6 @@ MSG_WARNING = (
     "its seed (and passphrase, if any).  Otherwise all coins you "
     "receive will be unspendable."
 )
-
-# 2FA support removed for initial release
-
-SUPPORTED_XTYPES = ("standard", "p2wpkh-p2sh", "p2wpkh", "p2wsh-p2sh", "p2wsh")
-XPUB_HEADERS_MAINNET = {
-    "standard": "0488b21e",  # xpub
-    "p2wpkh-p2sh": "049d7cb2",  # ypub
-    "p2wsh-p2sh": "0295b43f",  # Ypub
-    "p2wpkh": "04b24746",  # zpub
-    "p2wsh": "02aa7ed3",  # Zpub
-}
-XPUB_HEADERS_TESTNET = {
-    "standard": "043587cf",  # tpub
-    "p2wpkh-p2sh": "044a5262",  # upub
-    "p2wsh-p2sh": "024289ef",  # Upub
-    "p2wpkh": "045f1cf6",  # vpub
-    "p2wsh": "02575483",  # Vpub
-}
-XPRV_HEADERS_MAINNET = {
-    "standard": "0488ade4",  # xprv
-    "p2wpkh-p2sh": "049d7878",  # yprv
-    "p2wsh-p2sh": "0295b005",  # Yprv
-    "p2wpkh": "04b2430c",  # zprv
-    "p2wsh": "02aa7a99",  # Zprv
-}
-XPRV_HEADERS_TESTNET = {
-    "standard": "04358394",  # tprv
-    "p2wpkh-p2sh": "044a4e28",  # uprv
-    "p2wsh-p2sh": "024285b5",  # Uprv
-    "p2wpkh": "045f18bc",  # vprv
-    "p2wsh": "02575048",  # Vprv
-}
 
 
 def msg_magic(message: bytes) -> bytes:
@@ -102,10 +51,6 @@ def int_to_hex(i, length=1):
     s = hex(i)[2:].rstrip("L")
     s = "0" * (2 * length - len(s)) + s
     return s
-
-
-def dict_swap_keys_values(dictionary):
-    return {value: key for key, value in dictionary.items()}
 
 
 # simple observer that will print on the console the card connection events.
@@ -415,9 +360,6 @@ class CardConnector:
         self.parser.authentikey_coordx = None
         self.parser.authentikey_from_storage = None
 
-    def get_sw12(self, sw1, sw2):
-        return 16 * sw1 + sw2
-
     def card_select(self):
         logger.debug("In card_select")
 
@@ -566,68 +508,6 @@ class CardConnector:
 
         return response, sw1, sw2
 
-    def card_get_ndef(self):
-        logger.debug("In card_get_ndef")
-        cla = JCconstants.CardEdge_CLA
-        ins = 0x3F
-        p1 = 0x00
-        p2 = 0x01  # get
-        apdu = [cla, ins, p1, p2]
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        if sw1 == 0x90 and sw2 == 0x00:
-            ndef_bytes = bytes(response[1:])
-        elif sw1 == 0x6D and sw2 == 0x00:  # unsupported by the card
-            ndef_bytes = []
-        else:
-            logger.warning(f"Error while recovering card ndef: {hex(256 * sw1 + sw2)}")
-            ndef_bytes = []
-
-        return response, sw1, sw2, ndef_bytes
-
-    def card_set_ndef(self, ndef_bytes):
-        logger.debug("In card_set_ndef")
-        cla = JCconstants.CardEdge_CLA
-        ins = 0x3F
-        p1 = 0x00
-        p2 = 0x00  # set
-
-        ndef_list = list(ndef_bytes)
-        data = [len(ndef_list)] + ndef_list
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        return response, sw1, sw2
-
-    def card_set_nfc_policy(self, policy_byte):
-        logger.debug("In card_set_nfc_policy")
-        cla = JCconstants.CardEdge_CLA
-        ins = 0x3E
-        p1 = policy_byte
-        p2 = 0x00  # set
-
-        data = []
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        return response, sw1, sw2
-
-    def card_set_feature_policy(self, feature_id_byte, feature_policy_byte):
-        logger.debug("In card_set_feature_policy")
-        cla = JCconstants.CardEdge_CLA
-        ins = 0x3A
-        p1 = feature_id_byte
-        p2 = feature_policy_byte
-
-        data = []
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        return response, sw1, sw2
-
     def card_setup(
         self,
         pin_tries0,
@@ -711,105 +591,6 @@ class CardConnector:
 
         return response, sw1, sw2
 
-    def card_reset_factory_signal(self):
-        # transmit apdu
-        apdu = [0xB0, 0xFF, 0x00, 0x00, 0x00]
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x90 and sw2 == 0x00:
-            logger.info("APDU reset transmitted successfully")
-        else:
-            logger.info(
-                f"APDU reset transmitted with result code {hex(256 * sw1 + sw2)}"
-            )
-        return response, sw1, sw2
-
-    ###########################################
-    #      Satochip private key commands      #
-    ###########################################
-
-    def satochip_import_privkey(self, keyslot_nbr, privkey: bytes):
-        """This function imports a private ECkey into the card."""
-        logger.debug("In satochip_import_privkey")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_IMPORT_KEY
-        p1 = keyslot_nbr
-        p2 = 0x00
-
-        key_encoding = JCconstants.BLOB_ENC_PLAIN
-        key_type = 12  # KeyBuilder.TYPE_EC_FP_PRIVATE
-        key_size = [0x01, 0x00]  # 256bits
-        rfu = 6 * [0x00]
-        key_blob = list(privkey)
-        if len(key_blob) == 32:
-            key_blob = [0x00, 0x20] + key_blob
-        else:
-            raise ValueError(
-                f"Wrong private key size during import private_key size: {len(key_blob)} instead of 32"
-            )
-        data = [key_encoding, key_type] + key_size + rfu + key_blob
-
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-
-        # send apdu (contains sensitive data!)
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        if sw1 != 0x90 or sw2 != 0x00:
-            logger.error(
-                f"Error during privkey import: (error code {hex(256 * sw1 + sw2)})"
-            )
-            raise UnexpectedSW12Error(
-                f"Error during privkey import: (error code {hex(256 * sw1 + sw2)})",
-                sw1=sw1,
-                sw2=sw2,
-            )
-
-    def satochip_reset_privkey(self, keyslot_nbr):
-        """This function reset a private ECkey previously imported into the card."""
-        logger.debug("In satochip_reset_privkey")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_RESET_KEY
-        p1 = keyslot_nbr
-        p2 = 0x00
-
-        data = []
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 != 0x90 or sw2 != 0x00:
-            logger.error(
-                f"Error during privkey import: (error code {hex(256 * sw1 + sw2)})"
-            )
-            raise UnexpectedSW12Error(
-                f"Error during privkey import: (error code {hex(256 * sw1 + sw2)})",
-                sw1=sw1,
-                sw2=sw2,
-            )
-
-    def satochip_get_pubkey_from_keyslot(self, keyslot_nbr):
-        """Return the public key associated with a private key stored at a given keyslot."""
-        logger.debug("In satochip_get_pubkey_from_keyslot")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_GET_PUBLIC_FROM_PRIVATE
-        p1 = keyslot_nbr
-        p2 = 0x00
-        apdu = [cla, ins, p1, p2]
-
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 != 0x90 or sw2 != 0x00:
-            logger.error(
-                f"Error during privkey import: (error code {hex(256 * sw1 + sw2)})"
-            )
-            raise UnexpectedSW12Error(
-                f"Error during privkey import: (error code {hex(256 * sw1 + sw2)})",
-                sw1=sw1,
-                sw2=sw2,
-            )
-
-        pubkey = self.parser.parse_get_pubkey_from_keyslot(response)
-        return pubkey
-
     ###########################################
     #              BIP32 commands             #
     ###########################################
@@ -854,117 +635,6 @@ class CardConnector:
 
         return authentikey
 
-    def card_import_encrypted_secret(self, secret_dic):
-        """Import an encrypted secret exported from a SeedKeeper."""
-        logger.debug("In card_import_encrypted_secret")
-
-        cla = JCconstants.CardEdge_CLA
-        ins = 0xAC
-        p1 = 0x00
-        p2 = 0x00
-        header = list(bytes.fromhex(secret_dic["header"]))[2 : (2 + 12)]
-        iv = list(bytes.fromhex(secret_dic["iv"]))
-        secret_list = list(bytes.fromhex(secret_dic["secret_encrypted"]))
-        hmac_list = list(bytes.fromhex(secret_dic["hmac"]))
-        data = (
-            header
-            + iv
-            + [(len(secret_list) >> 8), (len(secret_list) % 256)]
-            + secret_list
-            + [len(hmac_list)]
-            + hmac_list
-        )
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x90 and sw2 == 0x00:
-            pass
-        elif sw1 == 0x6D and sw2 == 0x00:
-            raise CardError(
-                "Error during secret import: operation not supported by the card (0x6D00)"
-            )
-        elif sw1 == 0x9C and sw2 == 0x17:
-            raise CardError("Secure import failed: card is already seeded (0x9C17)!")
-        elif sw1 == 0x9C and sw2 == 0x18:
-            raise CardError("Secure import failed: card already requires 2FA (0x9C18)!")
-        elif sw1 == 0x9C and sw2 == 0x0F:
-            raise CardError(f"Error during secret import: invalid parameter (0x9C0F)")
-        elif sw1 == 0x9C and sw2 == 0x33:
-            raise CardError("Secure import failed: wrong MAC (0x9C33)!")
-        elif sw1 == 0x9C and sw2 == 0x34:
-            raise CardError("Secure import failed: wrong fingerprint (0x9C34)!")
-        elif sw1 == 0x9C and sw2 == 0x35:
-            raise CardError("Secure import failed: TrustedPubkey (0x9C35)!")
-        else:
-            raise UnexpectedSW12Error(
-                f"Unexpected error during secure secret import (error code {hex(256 * sw1 + sw2)})"
-            )
-
-        secret_type = header[0]
-        if secret_type == 0x10:
-            authentikey = self.parser.parse_bip32_get_authentikey(response)
-            authentikey_hex = authentikey.get_public_key_bytes(compressed=True).hex()
-            logger.debug("authentikey_card= " + authentikey_hex)
-            return authentikey
-        elif secret_type == 0xB0:
-            return None
-
-    def card_import_trusted_pubkey(self, pubkey_list):
-        """Import a trusted ec pubkey into the device."""
-        logger.debug("In card_import_trusted_pubkey")
-        if type(pubkey_list) is str:
-            pubkey_list = list(bytes.fromhex(pubkey_list))
-        elif type(pubkey_list) is bytes:
-            pubkey_list = list(pubkey_list)
-
-        cla = JCconstants.CardEdge_CLA
-        ins = 0xAA
-        p1 = 0x00
-        p2 = 0x00
-        pubkey_size = len(pubkey_list)
-        if pubkey_size != 65:
-            raise RuntimeError(
-                f"Error during trusted pubkey import: wrong pubkey size, expected 65 but received {pubkey_size}"
-            )
-        data = [pubkey_size >> 8, pubkey_size % 256] + pubkey_list
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x6D and sw2 == 0x00:
-            raise CardError(
-                "Error during secret import: operation not supported by the card (0x6D00)"
-            )
-        elif sw1 == 0x9C and sw2 == 0x17:
-            raise CardError("Secure import failed: card is already seeded (0x9C17)!")
-        elif sw1 == 0x9C and sw2 == 0x0F:
-            raise CardError(f"Error during secret import: invalid parameter (0x9C0F)")
-
-        if self.parser.authentikey is None:
-            self.parser.authentikey = self.card_export_authentikey()
-
-        pubkey_hex = self.parser.get_trusted_pubkey(response)
-        return pubkey_hex
-
-    def card_export_trusted_pubkey(self):
-        """Export the trusted ec pubkey from the device."""
-        logger.debug("In card_export_trusted_pubkey")
-        cla = JCconstants.CardEdge_CLA
-        ins = 0xAB
-        p1 = 0x00
-        p2 = 0x00
-        apdu = [cla, ins, p1, p2]
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x9C and sw2 == 0x35:
-            return 65 * "00"
-        if sw1 == 0x6D and sw2 == 0x00:
-            return 65 * "FF"
-
-        if self.parser.authentikey is None:
-            self.parser.authentikey = self.card_export_authentikey()
-
-        pubkey_hex = self.parser.get_trusted_pubkey(response)
-        return pubkey_hex
-
     def card_export_authentikey(self):
         """Export the device authentikey.
 
@@ -997,29 +667,6 @@ class CardConnector:
             raise UnexpectedSW12Error(
                 f"Unexpected error during authentikey export (error code {hex(256 * sw1 + sw2)})"
             )
-
-    def card_reset_seed(self, pin, hmac=None):
-        """Reset the seed. The hmac parameter is unused (2FA removed)."""
-        logger.debug("In card_reset_seed")
-        if type(pin) is str:
-            pin = list(pin.encode("utf-8"))
-        elif type(pin) is bytes:
-            pin = list(pin)
-
-        # 2FA support removed: hmac always empty
-        hmac_data = []
-
-        cla = JCconstants.CardEdge_CLA
-        ins = 0x77
-        p1 = len(pin)
-        p2 = 0x00
-        lc = len(pin) + len(hmac_data)
-        apdu = [cla, ins, p1, p2, lc] + pin + hmac_data
-
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x90 and sw2 == 0x00:
-            self.is_seeded = False
-        return response, sw1, sw2
 
     def card_bip32_get_authentikey(self):
         """Return the authentikey."""
@@ -1137,106 +784,6 @@ class CardConnector:
                     )
                     return privkey, chaincode
 
-    def card_bip32_get_xpub(self, path, xtype, is_mainnet, sid=None):
-        """Get the BIP32 xpub for given path."""
-        assert xtype in SUPPORTED_XTYPES
-
-        logger.info(f"card_bip32_get_xpub(): path={str(path)}")
-        if type(path) == str:
-            (depth, bytepath) = self.parser.bip32path2bytes(path)
-
-        childkey, childchaincode = self.card_bip32_get_extendedkey(bytepath, sid)
-        if depth == 0:
-            fingerprint = bytes([0, 0, 0, 0])
-            child_number = bytes([0, 0, 0, 0])
-        else:
-            parentkey, parentchaincode = self.card_bip32_get_extendedkey(
-                bytepath[0:-4], sid
-            )
-            fingerprint = hash_160(parentkey.get_public_key_bytes(compressed=True))[0:4]
-            child_number = bytepath[-4:]
-
-        xpub_header = (
-            XPUB_HEADERS_MAINNET[xtype] if is_mainnet else XPUB_HEADERS_TESTNET[xtype]
-        )
-        xpub = (
-            bytes.fromhex(xpub_header)
-            + bytes([depth])
-            + fingerprint
-            + child_number
-            + childchaincode
-            + childkey.get_public_key_bytes(compressed=True)
-        )
-        assert len(xpub) == 78
-        xpub = EncodeBase58Check(xpub)
-        logger.info(f"card_bip32_get_xpub(): xpub={str(xpub)}")
-        return xpub
-
-    def card_bip32_get_xprv(self, path, xtype, is_mainnet, sid=None):
-        """Get the BIP32 xpriv for given path."""
-        logger.info(f"card_bip32_get_xpriv(): path={str(path)}")
-        if type(path) == str:
-            (depth, bytepath) = self.parser.bip32path2bytes(path)
-
-        option_flags = 0x02  # request privkey
-        childkey, childchaincode = self.card_bip32_get_extendedkey(
-            bytepath, sid, option_flags
-        )
-        if depth == 0:
-            fingerprint = bytes([0, 0, 0, 0])
-            child_number = bytes([0, 0, 0, 0])
-        else:
-            parentkey, parentchaincode = self.card_bip32_get_extendedkey(
-                bytepath[0:-4], sid, option_flags
-            )
-            fingerprint = hash_160(parentkey.get_public_key_bytes(compressed=True))[0:4]
-            child_number = bytepath[-4:]
-
-        xprv_header = (
-            XPRV_HEADERS_MAINNET[xtype] if is_mainnet else XPRV_HEADERS_TESTNET[xtype]
-        )
-        xprv = (
-            bytes.fromhex(xprv_header)
-            + bytes([depth])
-            + fingerprint
-            + child_number
-            + childchaincode
-            + bytes([0x00])
-            + childkey.get_secret_bytes()
-        )
-        assert len(xprv) == 78
-        xprv = EncodeBase58Check(xprv)
-        logger.info(f"card_bip32_get_xpub(): xprv={str(xprv)}")
-        return xprv
-
-    def card_bip32_get_liquid_master_blinding_key(self):
-        logger.info("card_bip32_get_liquid_master_blinding_key")
-
-        cla = JCconstants.CardEdge_CLA
-        ins = 0x7D
-        p1 = 0x00
-        p2 = 0x00
-        lc = 0x00
-        apdu = [cla, ins, p1, p2, lc]
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        if sw1 != 0x90 or sw2 != 0x00:
-            raise UnexpectedSW12Error(
-                f"Unexpected error  (error code {hex(256 * sw1 + sw2)})", sw1, sw2
-            )
-
-        offset = 0
-        keySize = 256 * (response[offset] & 0xFF) + response[offset + 1]
-        offset += 2
-        blindingKey = response[2 : 2 + keySize]
-        offset += keySize
-
-        sigSize = 256 * response[offset] + response[offset + 1]
-        offset += 2
-        sig = response[offset : (offset + sigSize)]
-
-        return blindingKey
-
     ###########################################
     #            Signing commands             #
     ###########################################
@@ -1346,25 +893,6 @@ class CardConnector:
         response, sw1, sw2 = self.card_transmit(apdu)
         return response, sw1, sw2
 
-    def card_sign_transaction_hash(self, keynbr, txhash, chalresponse=None):
-        """Sign the transaction hash in the device. The chalresponse parameter is unused (2FA removed)."""
-        logger.debug("In card_sign_transaction_hash")
-        cla = JCconstants.CardEdge_CLA
-        ins = 0x7A
-        p1 = keynbr
-        p2 = 0x00
-
-        if len(txhash) != 32:
-            raise ValueError(
-                "Wrong txhash length: " + str(len(txhash)) + "(should be 32)"
-            )
-        data = list(txhash)
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-
-        response, sw1, sw2 = self.card_transmit(apdu)
-        return response, sw1, sw2
-
     def card_sign_schnorr_hash(self, keynbr, txhash, chalresponse=None):
         """Sign the transaction hash using schnorr signature."""
         logger.debug("In card_sign_schnorr_hash")
@@ -1408,119 +936,9 @@ class CardConnector:
         response, sw1, sw2 = self.card_transmit(apdu)
         return response, sw1, sw2
 
-    def card_musig2_generate_nonce(self, keynbr: int, aggpk, msg, extra):
-        """Generate a MuSig2 nonce."""
-        logger.debug("in card_musig2_generate_nonce")
-
-        cla = JCconstants.CardEdge_CLA
-        ins = 0x7E
-        p1 = keynbr
-
-        p2 = JCconstants.OP_INIT
-
-        data = []
-        if aggpk is None:
-            data += [0x00]
-        else:
-            data += [len(aggpk)] + list(aggpk)
-        if msg is None:
-            data += [0xFF]
-        else:
-            data += [len(msg)] + list(msg)
-        if extra is None:
-            data += [0x00]
-        else:
-            data += [len(extra)] + list(extra)
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-
-        response, sw1, sw2 = self.card_transmit(apdu)
-        pubnonce = bytes(response)
-
-        p2 = JCconstants.OP_FINALIZE
-        data = []
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-
-        response, sw1, sw2 = self.card_transmit(apdu)
-        encrypted_secnonce = bytes(response)
-
-        return pubnonce, encrypted_secnonce
-
-    def card_musig2_sign_hash(
-        self,
-        keynbr: int,
-        secnonce: bytes,
-        b: bytes,
-        ea: bytes,
-        r_has_even_y: bool,
-        ggacc_is_1: bool,
-    ):
-        """Generate a MuSig2 signature."""
-        logger.debug("in card_musig2_sign_hash")
-
-        cla = JCconstants.CardEdge_CLA
-        ins = 0x7F
-        p1 = keynbr
-
-        p2 = JCconstants.OP_INIT
-
-        assert len(secnonce) == 144
-        data = list(secnonce)
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        p2 = JCconstants.OP_FINALIZE
-
-        assert len(b) == 32
-        assert len(ea) == 32
-        data = list(b)
-        data += list(ea)
-        if r_has_even_y:
-            data += [0x00]
-        else:
-            data += [0x01]
-        if ggacc_is_1:
-            data += [0x01]
-        else:
-            data += [0x00]
-
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-
-        response, sw1, sw2 = self.card_transmit(apdu)
-        psig = bytes(response)
-
-        return psig
-
     ###########################################
     #                PIN commands             #
     ###########################################
-
-    def card_create_PIN(self, pin_nbr, pin_tries, pin, ublk):
-        logger.debug("In card_create_PIN")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_CREATE_PIN
-        p1 = pin_nbr
-        p2 = pin_tries
-        lc = 1 + len(pin) + 1 + len(ublk)
-        apdu = [cla, ins, p1, p2, lc] + [len(pin)] + pin + [len(ublk)] + ublk
-
-        response, sw1, sw2 = self.card_transmit(apdu)
-        return response, sw1, sw2
-
-    def card_verify_PIN_deprecated(self, pin_nbr, pin):
-        logger.debug("In card_verify_PIN_deprecated")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_VERIFY_PIN
-        p1 = pin_nbr
-        p2 = 0x00
-        lc = len(pin)
-        apdu = [cla, ins, p1, p2, lc] + pin
-        response, sw1, sw2 = self.card_transmit(apdu)
-        return response, sw1, sw2
 
     def card_verify_PIN_simple(self, pin=None):
         """Verify card PIN."""
@@ -1592,84 +1010,6 @@ class CardConnector:
             self.set_pin(0, None)
             msg = f"Please check your card! Unexpected error (error code {hex(256 * sw1 + sw2)})"
             raise UnexpectedSW12Error(msg, sw1, sw2)
-
-    def card_verify_PIN(self, pin=None):
-        """Deprecated: use card_verify_PIN_simple() preferably."""
-        logger.debug("In card_verify_PIN")
-
-        while self.card_present:
-            if pin is None:
-                if self.pin is None:
-                    is_PIN = False
-                    if self.client is not None:
-                        msg = f"Enter the PIN for your {self.card_type}:"
-                        (is_PIN, pin_0) = self.client.PIN_dialog(msg)
-                    if is_PIN is False:
-                        raise RuntimeError(
-                            "Device cannot be unlocked without correct PIN code!"
-                        )
-                    pin_0 = list(pin_0)
-                else:
-                    pin_0 = self.pin
-            else:
-                pin_0 = list(bytes(pin, "utf-8"))
-
-            cla = JCconstants.CardEdge_CLA
-            ins = JCconstants.INS_VERIFY_PIN
-            apdu = [cla, ins, 0x00, 0x00, len(pin_0)] + pin_0
-
-            if self.needs_secure_channel:
-                apdu = self.card_encrypt_secure_channel(apdu)
-            response, sw1, sw2 = self._do_transmit(apdu)
-
-            if sw1 == 0x90 and sw2 == 0x00:
-                self.set_pin(0, pin_0)
-                return response, sw1, sw2
-            elif sw1 == 0x63 and (sw2 & 0xC0) == 0xC0:
-                pin = None
-                self.set_pin(0, None)
-                pin_left = sw2 & ~0xC0
-                msg = ("Wrong PIN! {} tries remaining!").format(pin_left)
-                if self.client is not None:
-                    self.client.request("show_error", msg)
-                else:
-                    raise WrongPinError(msg, pin_left)
-            elif sw1 == 0x9C and sw2 == 0x02:
-                pin = None
-                self.set_pin(0, None)
-                response2, sw1b, sw2b, d = self.card_get_status()
-                pin_left = d.get("PIN0_remaining_tries", -1)
-                msg = ("Wrong PIN! {} tries remaining!").format(pin_left)
-                if self.client is not None:
-                    self.client.request("show_error", msg)
-                else:
-                    raise WrongPinError(msg, pin_left)
-            elif sw1 == 0x9C and sw2 == 0x0C:
-                msg = (
-                    f"Too many failed attempts! Your device has been blocked! \n\n"
-                    f"You need your PUK code to unblock it (error code {hex(256 * sw1 + sw2)})"
-                )
-                if self.client is not None:
-                    self.client.request("show_error", msg)
-                else:
-                    raise IdentityBlockedError(msg)
-            elif sw1 == 0x9C and sw2 == 0x04:
-                msg = "Failed to verify PIN: setup not done (code 0x9C04)"
-                if self.client is not None:
-                    self.client.request("show_error", msg)
-                else:
-                    raise CardSetupNotDoneError(msg)
-            else:
-                self.set_pin(0, None)
-                msg = f"Please check your card! Unexpected error (error code {hex(256 * sw1 + sw2)})"
-                if self.client is not None:
-                    self.client.request("show_error", msg)
-                return response, sw1, sw2
-
-        if self.client is not None:
-            self.client.request("show_error", "No card found! Please insert card!")
-        else:
-            raise RuntimeError("No card found! Please insert card!")
 
     def set_pin(self, pin_nbr, pin):
         self.pin_nbr = pin_nbr
@@ -1847,216 +1187,6 @@ class CardConnector:
     #################################
     #         PERSO PKI            #
     #################################
-    def card_export_perso_pubkey(self):
-        logger.debug("In card_export_perso_pubkey")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_EXPORT_PKI_PUBKEY
-        p1 = 0x00
-        p2 = 0x00
-        apdu = [cla, ins, p1, p2]
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x90 and sw2 == 0x00:
-            pass
-        elif sw1 == 0x6D and sw2 == 0x00:
-            raise CardError(
-                "Error during personalization pubkey export: command unsupported (0x6D00)"
-            )
-        else:
-            raise UnexpectedSW12Error(
-                f"Error during personalization pubkey export (error code {hex(256 * sw1 + sw2)})"
-            )
-        return response
-
-    def card_import_perso_certificate(self, cert):
-        """Import a personalisation certificate into the device."""
-        logger.debug("In card_import_perso_certificate")
-        cert = list(base64.b64decode(cert))
-
-        buffer_offset = 0
-        buffer_left = len(cert)
-
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_IMPORT_PKI_CERTIFICATE
-        p1 = 00
-        p2 = JCconstants.OP_INIT
-        data = list(buffer_left.to_bytes(2, byteorder="big", signed=False))
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x9C and sw2 == 0x40:
-            logger.error("Error: Card PKI Already Locked")
-
-        while buffer_left > 0:
-            p2 = JCconstants.OP_PROCESS
-            data = []
-            data += list(buffer_offset.to_bytes(2, byteorder="big", signed=False))
-            chunk_size = min(128, buffer_left)
-            data += list(chunk_size.to_bytes(2, byteorder="big", signed=False))
-            data += cert[buffer_offset : (buffer_offset + chunk_size)]
-            lc = len(data)
-            apdu = [cla, ins, p1, p2, lc] + data
-            buffer_offset += chunk_size
-            buffer_left -= chunk_size
-            response, sw1, sw2 = self.card_transmit(apdu)
-            if sw1 != 0x90 or sw2 != 0x00:
-                logger.error("APDU Send Failed")
-                break
-
-    def card_export_perso_certificate(self):
-        logger.debug("In card_export_perso_certificate")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_EXPORT_PKI_CERTIFICATE
-        p1 = 0x00
-        p2 = 0x01
-
-        apdu = [cla, ins, p1, p2]
-        response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x90 and sw2 == 0x00:
-            pass
-        elif sw1 == 0x6D and sw2 == 0x00:
-            raise CardError(
-                "Error during personalization certificate export: command unsupported (0x6D00)"
-            )
-        elif sw1 == 0x00 and sw2 == 0x00:
-            raise CardNotPresentError(
-                "Error during personalization certificate export: no card present (0x0000)"
-            )
-        else:
-            raise UnexpectedSW12Error(
-                f"Error during personalization certificate export: (error code {hex(256 * sw1 + sw2)})"
-            )
-
-        certificate_size = (response[0] & 0xFF) * 256 + (response[1] & 0xFF)
-        if certificate_size == 0:
-            return "(empty)"
-
-        p2 = 0x02
-        certificate = certificate_size * [0]
-        chunk_size = 128
-        remaining_size = certificate_size
-        cert_offset = 0
-        while remaining_size > 128:
-            data = [((cert_offset >> 8) & 0xFF), (cert_offset & 0xFF)]
-            data += [0, (chunk_size & 0xFF)]
-            apdu = [cla, ins, p1, p2, len(data)] + data
-            response, sw1, sw2 = self.card_transmit(apdu)
-            certificate[cert_offset : (cert_offset + chunk_size)] = response[
-                0:chunk_size
-            ]
-            remaining_size -= chunk_size
-            cert_offset += chunk_size
-
-        data = [((cert_offset >> 8) & 0xFF), (cert_offset & 0xFF)]
-        data += [0, (remaining_size & 0xFF)]
-        apdu = [cla, ins, p1, p2, len(data)] + data
-        response, sw1, sw2 = self.card_transmit(apdu)
-        certificate[cert_offset : (cert_offset + remaining_size)] = response[
-            0:remaining_size
-        ]
-
-        self.cert_pem = self.parser.convert_bytes_to_string_pem(certificate)
-        return self.cert_pem
-
-    def card_import_ndef_authentikey(self, ndef_authentikey_bytes: bytes):
-        logger.debug("In card_import_ndef_authentikey")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_IMPORT_PKI_NDEF_AUTHENTIKEY
-        p1 = 0x00
-        p2 = 0x00
-
-        if len(ndef_authentikey_bytes) != 32:
-            raise Exception(
-                f"Error in card_import_ndef_authentikey: wrong privkey length {len(ndef_authentikey_bytes)} instead of 32"
-            )
-
-        apdu = [cla, ins, p1, p2, len(ndef_authentikey_bytes)] + list(
-            ndef_authentikey_bytes
-        )
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        return response, sw1, sw2
-
-    def card_challenge_response_pki(self, pubkey):
-        logger.debug("In card_challenge_response_pki")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_CHALLENGE_RESPONSE_PKI
-        p1 = 0x00
-        p2 = 0x00
-
-        challenge_from_host = urandom(32)
-
-        apdu = [cla, ins, p1, p2, len(challenge_from_host)] + list(challenge_from_host)
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        verif = self.parser.verify_challenge_response_pki(
-            response, challenge_from_host, pubkey
-        )
-
-        return verif
-
-    def card_verify_authenticity(self):
-        logger.debug("In card_verify_authenticity")
-
-        txt_ca = txt_subca = txt_device = "(empty)"
-        cert_pem = txt_error = ""
-        try:
-            cert_pem = self.card_export_perso_certificate()
-            logger.debug("Cert PEM: " + str(cert_pem))
-        except CardError:
-            txt_error = "".join(
-                [
-                    "Unable to get device certificate: feature unsupported! \n",
-                    "Authenticity validation is only available starting with Satochip v0.12 and higher",
-                ]
-            )
-        except CardNotPresentError:
-            txt_error = "No card found! Please insert card."
-        except UnexpectedSW12Error as ex:
-            txt_error = "Exception during device certificate export: " + str(ex)
-
-        if cert_pem == "(empty)":
-            txt_error = (
-                "Device certificate is empty: the card has not been personalized!"
-            )
-
-        if txt_error != "":
-            return False, txt_ca, txt_subca, txt_device, txt_error
-
-        validator = CertificateValidator()
-
-        cert_dict = validator.parse_pem_certificate(cert_pem)
-        subject_dict = cert_dict["subject"]
-        subject = subject_dict.get(b"CN", None).decode("utf-8")
-        if subject.lower() != self.UID_SHA1.lower():
-            txt_error = f"Certificate subject {subject} does not match the card serial number {self.UID_SHA1}!"
-            return False, txt_ca, txt_subca, txt_device, txt_error
-
-        is_valid_chain, device_pubkey, txt_ca, txt_subca, txt_device, txt_error = (
-            validator.validate_certificate_chain(cert_pem, self.card_type)
-        )
-        if not is_valid_chain:
-            return False, txt_ca, txt_subca, txt_device, txt_error
-
-        is_valid_chalresp, txt_error = self.card_challenge_response_pki(device_pubkey)
-        if not is_valid_chalresp:
-            return False, txt_ca, txt_subca, txt_device, txt_error
-
-        return True, txt_ca, txt_subca, txt_device, txt_error
-
-    #################################
-    #            HELPERS            #
-    #################################
-
-    def get_authentikey_from_masterseed(self, masterseed):
-        """Deprecated: since satochip applet v0.12, authentikey is generated once at initialization."""
-        bytekey = bytes("Bitcoin seed2", "utf8")
-        byteseed = bytes(masterseed)
-        mac = hmac_mod.new(bytekey, byteseed, hashlib.sha512).digest()[0:32]
-        priv = ECPrivkey(mac)
-        pub = priv.get_public_key_bytes(compressed=True)
-        pub_hex = pub.hex()
-        logger.debug("Authentikey_local= " + pub_hex)
-        return pub_hex
 
 
 #################################
@@ -2083,25 +1213,8 @@ class CardSetupNotDoneError(ApduError):
         super().__init__(message, 0x9C, 0x04, ins, response)
 
 
-class IncorrectP1Error(ApduError):
-    def __init__(self, message, ins=0x00, response=[]):
-        super().__init__(message, 0x9C, 0x10, ins, response)
-
-
 class SecureChannelError(Exception):
     """Exception related to the secure channel"""
-
-    pass
-
-
-class AuthenticationError(Exception):
-    """Raised when the command requires authentication first"""
-
-    pass
-
-
-class IdentityBlockedError(Exception):
-    """Raised when a PIN or PUK is blocked after too many wrong attempts"""
 
     pass
 
@@ -2148,93 +1261,13 @@ class CardResetToFactoryError(Exception):
     pass
 
 
-class CardError(Exception):
-    """Raised when the device returns an error code"""
-
-    pass
-
-
 class CardNotPresentError(Exception):
     """Raised when the device is not present"""
 
     pass
 
 
-class CardMemoryError(Exception):
-    """Raised when there is not enough memory in the card"""
+class CardError(Exception):
+    """Raised when the device returns an error code"""
 
-    def __init__(self, message="Not enough memory available"):
-        super().__init__(message)
-        self.sw1 = 0x9C
-        self.sw2 = 0x01
-        self.sw12hex = hex(256 * self.sw1 + self.sw2)
-
-
-class CardWrongLengthError(Exception):
-    """Raised when data provided to card has not the expected length"""
-
-    def __init__(self, message="Wrong length error"):
-        super().__init__(message)
-        self.sw1 = 0x67
-        self.sw2 = 0x00
-        self.sw12hex = hex(256 * self.sw1 + self.sw2)
-
-
-class CardInvalidParameter(Exception):
-    """Raised when data provided to card is not valid"""
-
-    def __init__(self, message="Data provided to card is invalid"):
-        super().__init__(message)
-        self.sw1 = 0x9C
-        self.sw2 = 0x0F
-        self.sw12hex = hex(256 * self.sw1 + self.sw2)
-
-
-class CardIncorrectP1(Exception):
-    """Raised when APDU P1 parameter provided to card is not valid"""
-
-    def __init__(self, message="P1 parameter provided to card is invalid"):
-        super().__init__(message)
-        self.sw1 = 0x9C
-        self.sw2 = 0x10
-        self.sw12hex = hex(256 * self.sw1 + self.sw2)
-
-
-class CardIncorrectP2(Exception):
-    """Raised when APDU P2 parameter provided to card is not valid"""
-
-    def __init__(self, message="P2 parameter provided to card is invalid"):
-        super().__init__(message)
-        self.sw1 = 0x9C
-        self.sw2 = 0x11
-        self.sw12hex = hex(256 * self.sw1 + self.sw2)
-
-
-class CardOperationNotAllowed(Exception):
-    """Raised when a requested operation is not allowed by the card"""
-
-    def __init__(self, message="Operation is not allowed by the card policy"):
-        super().__init__(message)
-        self.sw1 = 0x9C
-        self.sw2 = 0x03
-        self.sw12hex = hex(256 * self.sw1 + self.sw2)
-
-
-class CardIncorrectInitialization(Exception):
-    """Raised when multiple commands for an instruction are not requested in the correct order"""
-
-    def __init__(self, message="Incorrect initialization of operations"):
-        super().__init__(message)
-        self.sw1 = 0x9C
-        self.sw2 = 0x13
-        self.sw12hex = hex(256 * self.sw1 + self.sw2)
-
-
-class CardObjectAlreadyPresentError(Exception):
-    """Raised when object imported to the card is already present"""
-
-    def __init__(self, message="Imported object is already present"):
-        super().__init__(message)
-        self.sw1 = 0x9C
-        self.sw2 = 0x60
-        self.sw12hex = hex(256 * self.sw1 + self.sw2)
+    pass
