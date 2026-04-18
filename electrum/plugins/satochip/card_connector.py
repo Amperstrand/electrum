@@ -180,6 +180,7 @@ class RemovalObserver(CardObserver):
             self.cc.cardservice.connection = card.createConnection()
             self.cc.cardservice.connection.connect()
             self.cc.cardservice.connection.addObserver(self.observer)
+            self.cc._detect_protocol()
 
             # get CPLC
             try:
@@ -209,7 +210,9 @@ class RemovalObserver(CardObserver):
                     if (sw1 != 0x90 or sw2 != 0x00) and (sw1 != 0x9C or sw2 != 0x04):
                         self.cc.card_disconnect()
                         break
-                    if self.cc.needs_secure_channel:
+                    if self.cc.needs_secure_channel and not getattr(
+                        self.cc.sc, "initialized_secure_channel", False
+                    ):
                         self.cc.card_initiate_secure_channel()
 
                 # todo: skip or not for reset_factory?
@@ -252,6 +255,7 @@ class CardConnector:
         self.pin_nbr = None
         self.pin = None
         self.card_filter = card_filter
+        self._protocol = None  # set during card connection
         self.card_type = "card"
         self.cert_pem = None
         # cache protocol version (version x.y => 256*x+y)
@@ -278,6 +282,37 @@ class CardConnector:
         """WARNING: setting mode_factory_reset to True allows to reset the card to factory and erase all data!"""
         self.mode_factory_reset = mode_factory_reset
 
+    def _detect_protocol(self):
+        """Detect the active protocol from the current connection."""
+        from smartcard.CardConnection import CardConnection
+
+        try:
+            inner = self.cardservice.connection
+            if hasattr(inner, "component"):
+                inner = inner.component
+            proto = inner.getProtocol()
+            # Validate against known CardConnection constants
+            if proto in (
+                CardConnection.T0_protocol,
+                CardConnection.T1_protocol,
+                CardConnection.RAW_protocol,
+            ):
+                self._protocol = proto
+            else:
+                # Default to T=1 (most smartcards including Satochip use T=1)
+                self._protocol = CardConnection.T1_protocol
+        except Exception:
+            from smartcard.CardConnection import CardConnection
+
+            self._protocol = CardConnection.T1_protocol
+
+    def _do_transmit(self, apdu):
+        """Transmit APDU with explicit protocol for pyscard compatibility."""
+        from smartcard.CardConnection import CardConnection
+
+        protocol = self._protocol or CardConnection.T1_protocol
+        return self.cardservice.connection.transmit(apdu, protocol)
+
     ###########################################
     #             Applet management           #
     ###########################################
@@ -300,7 +335,7 @@ class CardConnector:
                 apdu = plain_apdu
 
             # transmit apdu
-            (response, sw1, sw2) = self.cardservice.connection.transmit(apdu)
+            (response, sw1, sw2) = self._do_transmit(apdu)
 
             # PIN authentication is required
             if sw1 == 0x9C and sw2 == 0x06:
@@ -337,7 +372,7 @@ class CardConnector:
         p1 = 0x9F
         p2 = 0x7F
         apdu = [cla, ins, p1, p2]
-        response, sw1, sw2 = self.cardservice.connection.transmit(apdu)
+        response, sw1, sw2 = self._do_transmit(apdu)
         return response, sw1, sw2
 
     def card_get_IIN(self):
@@ -347,7 +382,7 @@ class CardConnector:
         p1 = 0x00
         p2 = 0x42
         apdu = [cla, ins, p1, p2]
-        response, sw1, sw2 = self.cardservice.connection.transmit(apdu)
+        response, sw1, sw2 = self._do_transmit(apdu)
         return response, sw1, sw2
 
     def card_get_CIN(self):
@@ -357,7 +392,7 @@ class CardConnector:
         p1 = 0x00
         p2 = 0x45
         apdu = [cla, ins, p1, p2]
-        response, sw1, sw2 = self.cardservice.connection.transmit(apdu)
+        response, sw1, sw2 = self._do_transmit(apdu)
         return response, sw1, sw2
 
     def card_disconnect(self):
@@ -1304,7 +1339,7 @@ class CardConnector:
                 "Wrong txhash length: " + str(len(txhash)) + "(should be 32)"
             )
         # 2FA support removed: chalresponse always None
-        data = txhash
+        data = list(txhash)
         lc = len(data)
         apdu = [cla, ins, p1, p2, lc] + data
 
@@ -1323,7 +1358,7 @@ class CardConnector:
             raise ValueError(
                 "Wrong txhash length: " + str(len(txhash)) + "(should be 32)"
             )
-        data = txhash
+        data = list(txhash)
         lc = len(data)
         apdu = [cla, ins, p1, p2, lc] + data
 
@@ -1343,7 +1378,7 @@ class CardConnector:
             raise ValueError(
                 "Wrong txhash length: " + str(len(txhash)) + "(should be 32)"
             )
-        data = txhash
+        data = list(txhash)
 
         lc = len(data)
         apdu = [cla, ins, p1, p2, lc] + data
@@ -1515,7 +1550,7 @@ class CardConnector:
 
         if self.needs_secure_channel:
             apdu = self.card_encrypt_secure_channel(apdu)
-        response, sw1, sw2 = self.cardservice.connection.transmit(apdu)
+        response, sw1, sw2 = self._do_transmit(apdu)
 
         if sw1 == 0x9C and sw2 == 0x21:
             logger.error(
@@ -1524,7 +1559,7 @@ class CardConnector:
             self.card_initiate_secure_channel()
             apdu = [cla, ins, 0x00, 0x00, len(pin_0)] + pin_0
             apdu = self.card_encrypt_secure_channel(apdu)
-            response, sw1, sw2 = self.cardservice.connection.transmit(apdu)
+            response, sw1, sw2 = self._do_transmit(apdu)
 
         if sw1 == 0x90 and sw2 == 0x00:
             self.set_pin(0, pin_0)
@@ -1585,7 +1620,7 @@ class CardConnector:
 
             if self.needs_secure_channel:
                 apdu = self.card_encrypt_secure_channel(apdu)
-            response, sw1, sw2 = self.cardservice.connection.transmit(apdu)
+            response, sw1, sw2 = self._do_transmit(apdu)
 
             if sw1 == 0x90 and sw2 == 0x00:
                 self.set_pin(0, pin_0)
@@ -1736,7 +1771,7 @@ class CardConnector:
         p1 = 0x00
         p2 = 0x00
 
-        self.sc = SecureChannel(logger.getEffectiveLevel())
+        self.sc = SecureChannel()
         pubkey = list(self.sc.sc_pubkey_serialized)
         lc = len(pubkey)  # 65
         apdu = [cla, ins, p1, p2, lc] + pubkey

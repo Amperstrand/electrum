@@ -312,7 +312,7 @@ class CardDataParser:
             compsig2 = compsig[1:]
 
             try:
-                pk = ECPubkey.from_ecdsa_sig64(compsig2, id, hash)
+                pk = ECPubkey.from_ecdsa_sig64(bytes(compsig2), id, hash)
                 pkbytes = pk.get_public_key_bytes(compressed=True)
             except InvalidECPointException:
                 continue
@@ -344,7 +344,7 @@ class CardDataParser:
         recid = -1
         for id in range(4):
             try:
-                pk = ECPubkey.from_ecdsa_sig64(sigstring, id, hash)
+                pk = ECPubkey.from_ecdsa_sig64(bytes(sigstring), id, hash)
                 pkbytes = pk.get_public_key_bytes(compressed=True)
                 logger.debug("    =>parse_hash_signature - rec_pubkey:" + pkbytes.hex())
             except InvalidECPointException:
@@ -383,7 +383,7 @@ class CardDataParser:
             compsig = compsig[1:]
 
             try:
-                pk = ECPubkey.from_ecdsa_sig64(compsig, id, hash)
+                pk = ECPubkey.from_ecdsa_sig64(bytes(compsig), id, hash)
                 pkbytes = pk.get_public_key_bytes(compressed=True)
             except InvalidECPointException:
                 continue
@@ -418,7 +418,7 @@ class CardDataParser:
             compsig = compsig[1:]
 
             try:
-                pk = ECPubkey.from_ecdsa_sig64(compsig, id, hash)
+                pk = ECPubkey.from_ecdsa_sig64(bytes(compsig), id, hash)
             except InvalidECPointException:
                 continue
 
@@ -540,4 +540,3 @@ class CardDataParser:
         )
         cert_pem += "\r\n-----END CERTIFICATE-----"
         return cert_pem
-

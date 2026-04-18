@@ -85,7 +85,7 @@ class SatochipClient(HardwareClientBase):
         self._soft_device_id = None
         self.device = plugin.device
         self.handler = handler
-        self.cc = CardConnector(self, _logger.getEffectiveLevel())
+        self.cc = CardConnector(self)
         self.last_operation = float("inf")
 
     def __repr__(self):
