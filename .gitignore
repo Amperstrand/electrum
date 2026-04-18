@@ -28,6 +28,9 @@ contrib/trigger_binaries
 .coverage
 .pytest_cache
 
+# satochip local tests (not for upstream)
+electrum/plugins/satochip/tests/
+
 # build workspaces
 contrib/build-wine/tmp/
 contrib/build-wine/build/

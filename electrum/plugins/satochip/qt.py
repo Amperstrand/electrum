@@ -1006,9 +1006,10 @@ class WCSatochipUnlock(WCHWUnlock):
         self.wizard.load_next_component(view_key, self.wizard_data)
 
     def on_ready(self):
-        from electrum.util import UserFacingException
-
         _name, _info = self.wizard_data["hardware_device"]
+        self.plugin = self.plugins.get_plugin(_info.plugin_name)
+        self.title = _("Unlocking {} ({})").format(_info.model_name, _info.label)
+
         device_id = _info.device.id_
         client = self.plugins.device_manager.client_by_id(device_id, scan_now=False)
         if client is None:
@@ -1019,6 +1020,8 @@ class WCSatochipUnlock(WCHWUnlock):
         client.handler = self.plugin.create_handler(self.wizard)
 
         def unlock_task(client):
+            from electrum.util import UserFacingException
+
             try:
                 self.password = client.get_password_for_storage_encryption()
             except UserFacingException as e:

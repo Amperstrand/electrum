@@ -508,7 +508,7 @@ class SatochipPlugin(HW_PluginBase):
     keystore_class = SatochipKeyStore
     libraries_available = SMARTCARD
     minimum_library = (0, 0, 0)
-    DEVICE_IDS = ()
+    DEVICE_IDS = ((SATOCHIP_VID, SATOCHIP_PID),)
     SUPPORTED_XTYPES = (
         "standard",
         "p2wpkh-p2sh",
