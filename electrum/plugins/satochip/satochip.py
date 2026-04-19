@@ -5,7 +5,6 @@ from typing import Optional, TYPE_CHECKING
 import electrum_ecc as ecc
 from electrum_ecc.util import bip340_tagged_hash
 
-from electrum import constants
 from electrum.bitcoin import var_int
 from electrum.i18n import _
 from electrum.plugin import Device, DeviceInfo, runs_in_hwd_thread
