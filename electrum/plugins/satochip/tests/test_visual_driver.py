@@ -168,6 +168,7 @@ def flow0_card_reset():
     cc.card_select()
     time.sleep(1.5)
 
+    # Step 1: Authenticate with current PIN
     try:
         cc.card_initiate_secure_channel()
         cc.set_pin(0, list(b"123456"))
@@ -184,48 +185,44 @@ def flow0_card_reset():
         QTimer.singleShot(STEP_DELAY, flow1_wallet_creation)
         return
 
+    # Step 2: Reset seed (card calls LogOutAll internally)
     try:
-        pin = list(b"Muscle00")
-        cc.card_reset_seed(pin, [])
+        user_pin = list(b"123456")
+        response, sw1, sw2 = cc.card_reset_seed(user_pin, [])
+        if sw1 != 0x90:
+            raise Exception(f"reset_seed failed: SW={sw1:02X}{sw2:02X}")
         print("    Card seed reset OK", flush=True)
         time.sleep(0.3)
+    except Exception as e:
+        print(f"    Card seed reset failed: {e}", flush=True)
+        log_step("card reset + seed", False, f"reset failed: {e}")
+        try:
+            cc.card_disconnect()
+        except Exception:
+            pass
+        QTimer.singleShot(STEP_DELAY, flow1_wallet_creation)
+        return
 
+    # Step 3: Re-authenticate (card logged out after reset)
+    try:
         cc.card_initiate_secure_channel()
         cc.set_pin(0, list(b"123456"))
         cc.card_verify_PIN_simple()
         cc.card_initiate_secure_channel()
-
-        pin0 = list(b"123456")
-        ublk0 = list(b"0000000000000000")
-        pin1 = list(b"123456")
-        ublk1 = list(b"0000000000000000")
-        cc.card_setup(
-            pin_tries0=5,
-            ublk_tries0=5,
-            pin0=pin0,
-            ublk0=ublk0,
-            pin_tries1=1,
-            ublk_tries1=1,
-            pin1=pin1,
-            ublk1=ublk1,
-            memsize=32,
-            memsize2=0,
-            create_object_ACL=0x01,
-            create_key_ACL=0x01,
-            create_pin_ACL=0x01,
-        )
-        print("    Card setup OK", flush=True)
-        time.sleep(0.3)
-
-        cc.card_initiate_secure_channel()
-        cc.set_pin(0, pin0)
-        cc.card_verify_PIN_simple()
-        cc.card_initiate_secure_channel()
+        print("    Re-authenticated OK", flush=True)
     except Exception as e:
-        print(f"    Card reset/setup skipped: {e}", flush=True)
+        print(f"    Re-auth failed: {e}", flush=True)
+        log_step("card reset + seed", False, f"re-auth failed: {e}")
+        try:
+            cc.card_disconnect()
+        except Exception:
+            pass
+        QTimer.singleShot(STEP_DELAY, flow1_wallet_creation)
+        return
 
+    # Step 4: Import new seed
     seed_words = electrum_mnemonic.Mnemonic("en").make_seed(seed_type="standard")
-    seed_bytes = electrum_mnemonic.Mnemonic("en").to_seed(seed_words)
+    seed_bytes = electrum_mnemonic.Mnemonic.mnemonic_to_seed(seed_words, passphrase="")
 
     try:
         authentikey = cc.card_bip32_import_seed(seed_bytes)
@@ -235,7 +232,7 @@ def flow0_card_reset():
         else:
             log_step("card reset + seed", False, "authentikey is None")
     except Exception as e:
-        print(f"    Seed import failed (card may already have seed): {e}", flush=True)
+        print(f"    Seed import failed: {e}", flush=True)
         log_step("card reset + seed", False, f"seed import: {e}")
 
     try:

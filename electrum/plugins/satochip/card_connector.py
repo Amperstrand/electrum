@@ -1092,9 +1092,15 @@ class CardConnector:
 
     def card_reset_seed(self, pin, seed):
         logger.debug("In card_reset_seed")
+        if type(pin) == str:
+            pin = list(pin.encode("utf-8"))
+        elif type(pin) == bytes:
+            pin = list(pin)
+        if type(seed) == bytes:
+            seed = list(seed)
         cla = JCconstants.CardEdge_CLA
         ins = JCconstants.INS_BIP32_RESET_SEED
-        p1 = 0x00
+        p1 = len(pin)
         p2 = 0x00
         data = list(pin) + list(seed)
         lc = len(data)
