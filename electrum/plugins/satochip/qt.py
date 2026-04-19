@@ -142,6 +142,7 @@ class Plugin(SatochipPlugin, QtPluginBase):
 
         keystore.thread.add(connect, on_success=show_dialog)
 
+    @only_hook_if_libraries_available
     @hook
     def init_wallet_wizard(self, wizard: "QENewWalletWizard"):
         self.extend_wizard(wizard)
@@ -965,7 +966,7 @@ class WCSatochipRecoverSeed(WalletWizardComponent):
             return
 
         seed = self._seed_widget.get_seed()
-        passphrase = ""
+        passphrase = self._seed_widget.get_seed_extra_words() or ""
 
         cosigner_data = self.wizard.current_cosigner(self.wizard_data)
         cosigner_data["seed"] = seed

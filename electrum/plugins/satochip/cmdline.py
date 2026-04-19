@@ -23,7 +23,7 @@ class SatochipCmdLineHandler(CmdLineHandler):
             return getpass.getpass("")
 
     def get_pin(self, msg, confirm=False):
-        return raw_input(msg).strip()
+        return input(msg).strip()
 
     def prompt_auth(self, msg):
         return False

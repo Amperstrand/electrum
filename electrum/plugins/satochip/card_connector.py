@@ -1088,6 +1088,20 @@ class CardConnector:
 
         return response, sw1, sw2
 
+    def card_reset_seed(self, pin, seed):
+        logger.debug("In card_reset_seed")
+        cla = JCconstants.CardEdge_CLA
+        ins = JCconstants.INS_BIP32_RESET_SEED
+        p1 = 0x00
+        p2 = 0x00
+        data = list(pin) + list(seed)
+        lc = len(data)
+        apdu = [cla, ins, p1, p2, lc] + data
+        response, sw1, sw2 = self.card_transmit(apdu)
+        if sw1 == 0x90 and sw2 == 0x00:
+            self.setup_done = False
+        return response, sw1, sw2
+
     def card_logout_all(self):
         logger.debug("In card_logout_all")
         cla = JCconstants.CardEdge_CLA

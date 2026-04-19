@@ -308,6 +308,38 @@ class SatochipClient(HardwareClientBase):
             else:
                 return is_PIN, pin
 
+    def PIN_change_dialog(self, msg_old, msg_new, msg_confirm, msg_error, msg_cancel):
+        """Prompt user for old PIN, new PIN, confirm. Returns (True, old, new) or (False, None, None)."""
+        (is_pin, oldpin) = self.PIN_dialog(msg_old)
+        if not is_pin:
+            self.request("show_message", msg_cancel)
+            return False, None, None
+        while True:
+            (is_pin, newpin) = self.PIN_dialog(msg_new)
+            if not is_pin:
+                self.request("show_message", msg_cancel)
+                return False, None, None
+            (is_pin, newpin_confirm) = self.PIN_dialog(msg_confirm)
+            if not is_pin:
+                self.request("show_message", msg_cancel)
+                return False, None, None
+            if newpin != newpin_confirm:
+                self.request("show_error", msg_error)
+            else:
+                return True, oldpin, newpin
+
+    @runs_in_hwd_thread
+    def perform_factory_reset(self):
+        """Factory reset: unblock PIN with random PUK to trigger card reset."""
+        ublk_0 = list(b"\x00" * 16)
+        pin_0 = list(b"\x00" * 6)
+        response, sw1, sw2 = self.cc.card_unblock_PIN(0, ublk_0, pin_0)
+        if sw1 == 0x69 and sw2 == 0x85:
+            pass  # PIN not blocked yet — proceed with card_reset_seed
+        elif sw1 != 0x90:
+            pass  # unblock failed, try reset anyway
+        self.cc.card_reset_seed(list(b"Muscle00"), [])
+
     # -- handler communication -----------------------------------------------
 
     def request(self, request_type, *args):
@@ -624,7 +656,6 @@ class SatochipPlugin(HW_PluginBase):
             time.sleep(0.3)
             if not client._ensure_card_connection():
                 raise UserFacingException(_("Cannot communicate with the card."))
-            self.cc = client.cc
             (_, _, _, status) = client.cc.card_get_status()
             if status.get("setup_done"):
                 return
