@@ -288,7 +288,9 @@ class CardConnector:
             # secure channel not initialized
             elif sw1 == 0x9C and sw2 == 0x21:
                 logger.error("In card_transmit secure channel not initialized (0x9C21)")
+                self.needs_secure_channel = False
                 self.card_initiate_secure_channel()
+                self.needs_secure_channel = True
             # decrypt response
             elif sw1 == 0x90 and sw2 == 0x00:
                 if self.needs_secure_channel and ins not in [
@@ -1130,7 +1132,7 @@ class CardConnector:
         lc = len(pubkey)  # 65
         apdu = [cla, ins, p1, p2, lc] + pubkey
 
-        response, sw1, sw2 = self.card_transmit(apdu)
+        response, sw1, sw2 = self._do_transmit(apdu)
 
         peer_pubkey = self.parser.parse_initiate_secure_channel(response)
         peer_pubkey_bytes = peer_pubkey.get_public_key_bytes(compressed=False)
