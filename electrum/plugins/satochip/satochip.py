@@ -480,7 +480,7 @@ class SatochipKeyStore(Hardware_KeyStore):
             )
             if compsig == b"":
                 self.handler.show_error(_("Wrong signature!"))
-            return compsig
+            return bytes(compsig)
         except CardNotPresentError:
             self.handler.show_error(
                 _("Card not detected. Please insert your Satochip.")

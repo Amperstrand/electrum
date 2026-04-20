@@ -31,6 +31,16 @@ STEP_DELAY = 2500
 PIN = "123456"
 seed_words = None
 _pin_timer_active = False
+_pin_restore_client = None
+
+
+def _restore_pin_atexit():
+    global _pin_restore_client
+    if _pin_restore_client:
+        try:
+            _pin_restore_client.cc.card_change_PIN(0, list(b"654321"), list(b"123456"))
+        except Exception:
+            pass
 
 
 def log_step(name, ok, detail=""):
@@ -622,16 +632,49 @@ def flow2_settings_dialog():
 def flow2_close_settings():
     from electrum.plugins.satochip.qt import SatochipSettingsDialog
 
+    dialog = None
     for widget in QApplication.topLevelWidgets():
         if isinstance(widget, SatochipSettingsDialog) and widget.isVisible():
-            print("  [STEP] Found settings dialog, closing...", flush=True)
-            widget.close()
-            log_step("settings dialog content", True, "dialog was visible")
+            dialog = widget
             break
-    else:
-        log_step("settings dialog content", False, "dialog not found")
 
-    QTimer.singleShot(STEP_DELAY, flow3_sign_message)
+    if dialog is None:
+        log_step("settings dialog content", False, "dialog not found")
+        QTimer.singleShot(STEP_DELAY, flow3_sign_message)
+        return
+
+    # Poll until info tab QLabels are populated (async via show_values)
+    poll_attempts = [0]
+    max_polls = 20  # 500ms * 20 = 10s
+
+    def _poll_labels():
+        if poll_attempts[0] >= max_polls:
+            print("    Label polling timed out, closing anyway", flush=True)
+            dialog.close()
+            log_step("settings info", False, "polling timed out")
+            QTimer.singleShot(STEP_DELAY, flow3_sign_message)
+            return
+        poll_attempts[0] += 1
+        fw_text = dialog.fw_version.text()
+        if "<tt>" in fw_text and len(fw_text) > 4:
+            fw = dialog.fw_version.text().replace("<tt>", "")
+            dev_id = dialog.device_id_label.text().replace("<tt>", "")
+            seeded = dialog.is_seeded.text().replace("<tt>", "")
+            setup = dialog.setup_done.text().replace("<tt>", "")
+            tries = dialog.pin_tries.text().replace("<tt>", "")
+            detail = "fw=%s, seeded=%s, pin_tries=%s, device_id=%s" % (
+                fw,
+                seeded,
+                tries,
+                dev_id,
+            )
+            log_step("settings info", True, detail)
+            dialog.close()
+            QTimer.singleShot(STEP_DELAY, flow3_sign_message)
+        else:
+            QTimer.singleShot(500, _poll_labels)
+
+    QTimer.singleShot(500, _poll_labels)
 
 
 # -- Flow 3: Sign Message --
@@ -644,16 +687,90 @@ def flow3_sign_message():
         QTimer.singleShot(STEP_DELAY, flow4_show_address)
         return
 
-    # sign_verify_message() calls d.exec() which blocks the event loop.
-    # Instead, verify the method exists and test the underlying dialog directly.
-    if not hasattr(wallet_window, "sign_verify_message"):
-        log_step("sign message", False, "sign_verify_message method not found")
-        QTimer.singleShot(STEP_DELAY, flow4_show_address)
-        return
+    try:
+        from electrum import bitcoin
+        from electrum import constants as electrum_constants
 
-    log_step(
-        "sign message dialog", True, "method available, dialog tested in unit tests"
-    )
+        wallet = wallet_window.wallet
+        keystore = wallet.keystore
+        addresses = wallet.get_receiving_addresses()
+        if not addresses:
+            log_step("sign message", False, "no receiving addresses")
+            QTimer.singleShot(STEP_DELAY, flow4_show_address)
+            return
+
+        address = addresses[0]
+        sequence = wallet.get_address_index(address)
+        message = b"Satochip visual test"
+
+        find_and_fill_pin_dialog()
+        sig_bytes = keystore.sign_message(sequence, "Satochip visual test", None)
+
+        if not sig_bytes:
+            log_step("sign message", False, "sign_message returned empty")
+            QTimer.singleShot(STEP_DELAY, flow4_show_address)
+            return
+
+        # Diagnostics
+        print(
+            "    [DIAG] sig len=%d hex=%s" % (len(sig_bytes), sig_bytes.hex()),
+            flush=True,
+        )
+        print("    [DIAG] address=%s msg=%s" % (address, message), flush=True)
+        try:
+            from electrum_ecc import ECPubkey
+            from electrum.crypto import sha256d
+            from electrum.bitcoin import usermessage_magic, pubkey_to_address
+
+            h = sha256d(usermessage_magic(message))
+            pub, comp, tt = ECPubkey.from_ecdsa_sig65(sig_bytes, h)
+            pk = pub.get_public_key_hex(comp)
+            print(
+                "    [DIAG] rec_pk=%s comp=%s tt=%s" % (pk[:30], comp, tt), flush=True
+            )
+            for t in ["p2wpkh", "p2wpkh-p2sh", "p2pkh"]:
+                a = pubkey_to_address(t, pk, net=electrum_constants.BitcoinMainnet)
+                print(
+                    "    [DIAG] %s mainnet=%s match=%s" % (t, a, a == address),
+                    flush=True,
+                )
+            sig64 = bytes(sig_bytes[1:])
+            ev = pub.ecdsa_verify(sig64, h, enforce_low_s=False)
+            print("    [DIAG] ecdsa_verify=%s" % ev, flush=True)
+        except Exception as de:
+            print("    [DIAG] recovery failed: %s" % de, flush=True)
+            import traceback
+
+            traceback.print_exc()
+
+        # Try mainnet first (card uses m/84h/0h/0h = mainnet), then testnet
+        verified_mainnet = bitcoin.verify_usermessage_with_address(
+            address, sig_bytes, message, net=electrum_constants.BitcoinMainnet
+        )
+        verified_testnet = False
+        if not verified_mainnet:
+            verified_testnet = bitcoin.verify_usermessage_with_address(
+                address, sig_bytes, message, net=electrum_constants.BitcoinTestnet
+            )
+        verified = verified_mainnet or verified_testnet
+        net_label = (
+            "mainnet" if verified_mainnet else "testnet" if verified_testnet else "none"
+        )
+        if verified:
+            log_step(
+                "sign message",
+                True,
+                "signature verified (%s) for address %s" % (net_label, address[:12]),
+            )
+        else:
+            log_step(
+                "sign message",
+                False,
+                "verification failed (%s) for address %s" % (net_label, address[:12]),
+            )
+    except Exception as e:
+        log_step("sign message", False, str(e))
+
     QTimer.singleShot(STEP_DELAY, flow4_show_address)
 
 
@@ -664,28 +781,145 @@ def flow4_show_address():
     print("\n--- Flow 4: Show Address ---", flush=True)
     if wallet_window is None:
         log_step("show address", False, "no wallet window")
-        finish()
+        QTimer.singleShot(STEP_DELAY, flow5_change_label)
         return
 
     try:
-        print("  [STEP] Switching to addresses tab...", flush=True)
-        wallet_window.tabs.setCurrentIndex(1)
-        log_step("show address tab", True)
+        from electrum import bitcoin
+        from electrum.plugins.satochip.satochip import _bip32path2bytes
+
+        wallet = wallet_window.wallet
+        keystore = wallet.keystore
+        addresses = wallet.get_receiving_addresses()
+        if not addresses:
+            log_step("show address", False, "no receiving addresses")
+            QTimer.singleShot(STEP_DELAY, flow5_change_label)
+            return
+
+        address = addresses[0]
+        sequence = wallet.get_address_index(address)
+        derivation_prefix = keystore.get_derivation_prefix()
+        address_path = derivation_prefix + "/%d/%d" % sequence
+
+        (depth, bytepath) = _bip32path2bytes(address_path)
+        client = keystore.get_client()
+        (pubkey, chaincode) = client.cc.card_bip32_get_extendedkey(bytepath)
+        pubkey_hex = pubkey.get_public_key_bytes(compressed=True).hex()
+        txin_type = wallet.get_txin_type(address)
+        card_address = bitcoin.pubkey_to_address(txin_type, pubkey_hex)
+
+        if card_address == address:
+            log_step("show address", True, "card address matches wallet")
+        else:
+            log_step(
+                "show address",
+                False,
+                "card=%s wallet=%s" % (card_address[:12], address[:12]),
+            )
     except Exception as e:
-        log_step("show address tab", False, str(e))
+        log_step("show address", False, str(e))
 
-    print(
-        "  [STEP] Addresses tab is accessible (skipping right-click show)", flush=True
-    )
-    log_step("show address", True, "tab accessible")
-
-    finish()
+    QTimer.singleShot(STEP_DELAY, flow5_change_label)
 
 
 def finish():
     print_summary()
     cleanup()
     QTimer.singleShot(2000, lambda: app.quit() if app else None)
+
+
+# -- Flow 5: Change Card Label --
+
+
+def flow5_change_label():
+    print("\n--- Flow 5: Change Card Label ---", flush=True)
+    if wallet_window is None:
+        log_step("change label", False, "no wallet window")
+        QTimer.singleShot(STEP_DELAY, flow6_change_pin)
+        return
+
+    try:
+        keystore = wallet_window.wallet.keystore
+        client = keystore.get_client()
+        (_, _, _, old_label) = client.cc.card_get_label()
+
+        try:
+            client.cc.card_set_label("visual-test")
+            (_, _, _, new_label) = client.cc.card_get_label()
+            if new_label == "visual-test":
+                log_step("change label", True, "round-trip OK")
+            else:
+                log_step(
+                    "change label", False, "expected visual-test got %s" % new_label
+                )
+        finally:
+            restore = old_label if old_label not in ("(none)", "(unknown)") else ""
+            client.cc.card_set_label(restore)
+    except Exception as e:
+        log_step("change label", False, str(e))
+
+    QTimer.singleShot(STEP_DELAY, flow6_change_pin)
+
+
+# -- Flow 6: Change PIN --
+
+
+def flow6_change_pin():
+    print("\n--- Flow 6: Change PIN ---", flush=True)
+    global _pin_restore_client
+
+    if wallet_window is None:
+        log_step("change PIN", False, "no wallet window")
+        QTimer.singleShot(STEP_DELAY, flow7_wizard_views)
+        return
+
+    try:
+        keystore = wallet_window.wallet.keystore
+        client = keystore.get_client()
+        _pin_restore_client = client
+
+        client.cc.card_change_PIN(0, list(b"123456"), list(b"654321"))
+        verified = client.verify_PIN()
+        if verified:
+            log_step("change PIN", True, "round-trip OK")
+        else:
+            log_step("change PIN", False, "verify_PIN returned False after change")
+
+        try:
+            client.cc.card_change_PIN(0, list(b"654321"), list(b"123456"))
+        except Exception as e:
+            log_step("change PIN restore", False, str(e))
+    except Exception as e:
+        log_step("change PIN", False, str(e))
+    finally:
+        _pin_restore_client = None
+
+    QTimer.singleShot(STEP_DELAY, flow7_wizard_views)
+
+
+# -- Flow 7: Wizard Edge Case Views --
+
+
+def flow7_wizard_views():
+    print("\n--- Flow 7: Wizard Edge Case Views ---", flush=True)
+
+    try:
+        from electrum.plugins.satochip.qt import WCSatochipBlocked, WCSatochipWrongCard
+
+        log_step(
+            "blocked card view",
+            WCSatochipBlocked is not None,
+            "WCSatochipBlocked importable",
+        )
+        log_step(
+            "wrong card view",
+            WCSatochipWrongCard is not None,
+            "WCSatochipWrongCard importable",
+        )
+    except Exception as e:
+        log_step("wizard views", False, str(e))
+
+    QTimer.singleShot(STEP_DELAY, finish)
 
 
 def main():
@@ -710,6 +944,7 @@ def main():
     wallet_dir = f"/tmp/sv_{short_id}"
     os.makedirs(wallet_dir, exist_ok=True)
     atexit.register(cleanup)
+    atexit.register(_restore_pin_atexit)
     print(f"Temp wallet dir: {wallet_dir}", flush=True)
 
     config = SimpleConfig({"electrum_path": wallet_dir, "testnet": True})
