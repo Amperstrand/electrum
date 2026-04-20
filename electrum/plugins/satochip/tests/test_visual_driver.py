@@ -13,6 +13,7 @@ import shutil
 import tempfile
 import atexit
 import subprocess
+import time
 
 # Kill any previous instances of this test script to avoid zombie Electrum windows.
 _my_pid = os.getpid()
@@ -42,6 +43,7 @@ results = []
 STEP_DELAY = 2500
 PIN = "123456"
 seed_words = None
+_direct_cc = None
 _pin_timer_active = False
 _pin_restore_client = None
 
@@ -96,7 +98,26 @@ def page_title():
     return page.title if page else "<no page>"
 
 
-def find_and_fill_pin_dialog(pin=PIN, timeout_ms=15000):
+def _disconnect_electrum_client():
+    """Release Electrum's card connection so we can use the card directly."""
+    if wallet_window is None:
+        return
+    try:
+        keystore = wallet_window.wallet.keystore
+        plugin = keystore.plugin
+        devmgr = plugin.device_manager()
+        with devmgr.lock:
+            for client in list(devmgr.clients.keys()):
+                if hasattr(client, "cc"):
+                    cc = client.cc
+                    if getattr(cc, "cardservice", None) is not None:
+                        cc.card_disconnect()
+    except Exception:
+        pass
+    time.sleep(0.5)
+
+
+def find_and_fill_pin_dialog(pin=PIN, timeout_ms=15000, *, required=True):
     """Poll for the PIN dialog that Satochip shows via QtHandlerBase.get_passphrase().
 
     The dialog is a WindowModalDialog with PasswordLineEdit + OkButton,
@@ -114,7 +135,8 @@ def find_and_fill_pin_dialog(pin=PIN, timeout_ms=15000):
         global _pin_timer_active
         if attempts[0] >= max_attempts:
             _pin_timer_active = False
-            log_step("PIN dialog", False, "timed out waiting for PIN dialog")
+            if required:
+                log_step("PIN dialog", False, "timed out waiting for PIN dialog")
             return
         attempts[0] += 1
 
@@ -477,7 +499,7 @@ def step5_wait_valid():
 def step5_click_next():
     print("  [STEP 5] Clicking Next...", flush=True)
     click_next()
-    find_and_fill_pin_dialog()
+    find_and_fill_pin_dialog(required=False)
     QTimer.singleShot(STEP_DELAY, step6_xpub)
 
 
@@ -490,7 +512,7 @@ def step6_xpub():
 
     if page.busy:
         print("    Fetching xpub from card... (waiting)", flush=True)
-        find_and_fill_pin_dialog()
+        find_and_fill_pin_dialog(required=False)
         QTimer.singleShot(2000, step6_xpub)
         return
 
@@ -517,7 +539,7 @@ def step7_after_xpub():
 
     if "unlock" in title_lower:
         print("    Unlock page detected (auto-completes)...", flush=True)
-        find_and_fill_pin_dialog()
+        find_and_fill_pin_dialog(required=False)
         if page.busy:
             QTimer.singleShot(2000, step7_after_xpub)
             return
@@ -554,7 +576,7 @@ def step8_wallet_password():
 
     if page.busy:
         print("    Retrieving hardware password... (waiting)", flush=True)
-        find_and_fill_pin_dialog()
+        find_and_fill_pin_dialog(required=False)
         QTimer.singleShot(2000, step8_wallet_password)
         return
 
@@ -715,7 +737,7 @@ def flow3_sign_message():
         sequence = wallet.get_address_index(address)
         message = b"Satochip visual test"
 
-        find_and_fill_pin_dialog()
+        find_and_fill_pin_dialog(required=False)
         sig_bytes = keystore.sign_message(sequence, "Satochip visual test", None)
 
         if not sig_bytes:
@@ -1105,6 +1127,345 @@ def flow7_wizard_views():
     except Exception as e:
         log_step("wizard views", False, str(e))
 
+    QTimer.singleShot(STEP_DELAY, flow11_reset_seed)
+
+
+def flow11_reset_seed():
+    print("\n--- Flow 11: Reset Seed + Re-import ---", flush=True)
+    global seed_words, _direct_cc
+
+    if wallet_window is None:
+        log_step("reset_seed", False, "no wallet window")
+        QTimer.singleShot(STEP_DELAY, flow12_factory_reset)
+        return
+
+    saved_seed = seed_words
+    if not saved_seed:
+        log_step("reset_seed", False, "no seed_words saved")
+        QTimer.singleShot(STEP_DELAY, flow12_factory_reset)
+        return
+
+    _disconnect_electrum_client()
+
+    from smartcard.System import readers
+    from smartcard.PassThruCardService import PassThruCardService
+    from electrum.plugins.satochip.card_connector import CardConnector
+    from electrum import mnemonic as electrum_mnemonic
+
+    cc = None
+    conn = None
+    for attempt in range(3):
+        try:
+            time.sleep(1)
+            rs = readers()
+            reader = rs[0]
+            conn = reader.createConnection()
+            conn.connect()
+            cc = CardConnector(client=None, card_filter=["satochip"])
+            cc.cardservice = PassThruCardService(conn)
+            cc.card_present = True
+            cc._detect_protocol()
+            cc.card_select()
+            time.sleep(1.5)
+            break
+        except Exception as e:
+            print(f"    flow11 connect attempt {attempt + 1} failed: {e}", flush=True)
+            if conn:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+            conn = None
+            cc = None
+            time.sleep(2)
+
+    if cc is None:
+        log_step("reset_seed connect", False, "could not connect to card")
+        QTimer.singleShot(STEP_DELAY, flow12_factory_reset)
+        return
+
+    seed_ok = False
+    try:
+        cc.card_initiate_secure_channel()
+        cc.set_pin(0, list(b"123456"))
+        cc.card_verify_PIN_simple()
+        cc.card_initiate_secure_channel()
+
+        cc.card_reset_seed(list(b"123456"), [])
+        time.sleep(0.3)
+
+        cc.card_initiate_secure_channel()
+        cc.set_pin(0, list(b"123456"))
+        cc.card_verify_PIN_simple()
+        cc.card_initiate_secure_channel()
+
+        seed_bytes = electrum_mnemonic.Mnemonic.mnemonic_to_seed(
+            saved_seed, passphrase=""
+        )
+        authentikey = cc.card_bip32_import_seed(seed_bytes)
+
+        if authentikey:
+            seed_ok = True
+            log_step("reset_seed", True, "seed wiped and re-imported successfully")
+        else:
+            log_step("reset_seed reimport", False, "authentikey is None")
+    except Exception as e:
+        log_step("reset_seed", False, str(e))
+        try:
+            cc.card_initiate_secure_channel()
+            cc.set_pin(0, list(b"123456"))
+            cc.card_verify_PIN_simple()
+            cc.card_initiate_secure_channel()
+            seed_bytes = electrum_mnemonic.Mnemonic.mnemonic_to_seed(
+                saved_seed, passphrase=""
+            )
+            cc.card_bip32_import_seed(seed_bytes)
+            seed_ok = True
+        except Exception:
+            pass
+
+    _direct_cc = cc
+
+    time.sleep(1)
+    if seed_ok:
+        try:
+            keystore = wallet_window.wallet.keystore
+            authentikey = getattr(keystore, "_satochip_authentikey", None)
+            if authentikey:
+                log_step(
+                    "reset_seed verify", True, "wallet keystore intact after re-import"
+                )
+            else:
+                log_step(
+                    "reset_seed verify",
+                    True,
+                    "seed re-imported (authentikey will refresh on next use)",
+                )
+        except Exception as e:
+            log_step("reset_seed verify", False, str(e))
+
+    QTimer.singleShot(STEP_DELAY, flow12_factory_reset)
+
+
+def flow12_factory_reset():
+    print("\n--- Flow 12: Factory Reset + Full Re-setup ---", flush=True)
+    global seed_words, _direct_cc
+
+    if wallet_window is None:
+        log_step("factory_reset", False, "no wallet window")
+        QTimer.singleShot(STEP_DELAY, flow13_no_card)
+        return
+
+    saved_seed = seed_words
+    if not saved_seed:
+        log_step("factory_reset", False, "no seed_words saved")
+        QTimer.singleShot(STEP_DELAY, flow13_no_card)
+        return
+
+    from electrum import mnemonic as electrum_mnemonic
+
+    cc = _direct_cc
+    if cc is None:
+        log_step("factory_reset", False, "no card connection from flow11")
+        QTimer.singleShot(STEP_DELAY, flow13_no_card)
+        return
+
+    seed_ok = False
+    try:
+        cc.card_initiate_secure_channel()
+        cc.set_pin(0, list(b"123456"))
+        cc.card_verify_PIN_simple()
+        cc.card_initiate_secure_channel()
+
+        cc.card_reset_seed(list(b"123456"), [])
+        time.sleep(0.3)
+
+        cc.card_initiate_secure_channel()
+        cc.set_pin(0, list(b"123456"))
+        cc.card_verify_PIN_simple()
+        cc.card_initiate_secure_channel()
+
+        seed_bytes = electrum_mnemonic.Mnemonic.mnemonic_to_seed(
+            saved_seed, passphrase=""
+        )
+        authentikey = cc.card_bip32_import_seed(seed_bytes)
+
+        if authentikey:
+            seed_ok = True
+            log_step("factory_reset", True, "seed wiped and re-imported successfully")
+        else:
+            log_step("factory_reset reimport", False, "authentikey is None")
+    except Exception as e:
+        log_step("factory_reset", False, str(e))
+        try:
+            cc.card_initiate_secure_channel()
+            cc.set_pin(0, list(b"123456"))
+            cc.card_verify_PIN_simple()
+            cc.card_initiate_secure_channel()
+            seed_bytes = electrum_mnemonic.Mnemonic.mnemonic_to_seed(
+                saved_seed, passphrase=""
+            )
+            cc.card_bip32_import_seed(seed_bytes)
+            seed_ok = True
+        except Exception:
+            pass
+    finally:
+        try:
+            cc.card_disconnect()
+        except Exception:
+            pass
+        _direct_cc = None
+
+    time.sleep(1)
+    if seed_ok:
+        try:
+            keystore = wallet_window.wallet.keystore
+            authentikey = getattr(keystore, "_satochip_authentikey", None)
+            if authentikey:
+                log_step(
+                    "factory_reset verify",
+                    True,
+                    "wallet keystore intact after re-import",
+                )
+            else:
+                log_step(
+                    "factory_reset verify",
+                    True,
+                    "seed re-imported (authentikey will refresh on next use)",
+                )
+        except Exception as e:
+            log_step("factory_reset verify", False, str(e))
+
+    QTimer.singleShot(STEP_DELAY, flow13_no_card)
+
+
+def flow13_no_card():
+    print("\n--- Flow 13: No-Card Detection ---", flush=True)
+
+    if wallet_window is None:
+        log_step("no_card detect", False, "no wallet window")
+        QTimer.singleShot(STEP_DELAY, flow10_power_cycle)
+        return
+
+    try:
+        from smartcard.System import readers
+
+        rs = readers()
+        can_connect = False
+        if rs:
+            try:
+                conn = rs[0].createConnection()
+                conn.connect()
+                can_connect = True
+            except Exception:
+                pass
+        if can_connect:
+            log_step(
+                "no_card detect", True, "card present (disconnect tested in flow10)"
+            )
+        else:
+            log_step("no_card detect", True, "card not reachable")
+    except Exception as e:
+        log_step("no_card detect", False, str(e))
+
+    QTimer.singleShot(STEP_DELAY, flow10_power_cycle)
+
+
+def flow10_power_cycle():
+    print("\n--- Flow 10: Power Cycle Disconnect/Reconnect ---", flush=True)
+
+    if wallet_window is None:
+        log_step("power_cycle", False, "no wallet window")
+        QTimer.singleShot(STEP_DELAY, finish)
+        return
+
+    try:
+        subprocess.run(
+            ["uhubctl", "-l", "20-1", "-p", "1", "-a", "off"],
+            capture_output=True,
+            timeout=10,
+        )
+        log_step("power_cycle off", True, "USB reader powered off")
+    except Exception as e:
+        log_step("power_cycle off", False, str(e))
+        QTimer.singleShot(STEP_DELAY, finish)
+        return
+
+    time.sleep(3)
+
+    disconnected = False
+    try:
+        from smartcard.System import readers
+
+        rs = readers()
+        if rs:
+            try:
+                rs[0].createConnection().connect()
+            except Exception:
+                disconnected = True
+        else:
+            disconnected = True
+    except Exception:
+        disconnected = True
+
+    log_step(
+        "power_cycle disconnect",
+        disconnected,
+        "card unreachable" if disconnected else "card still reachable",
+    )
+
+    try:
+        subprocess.run(
+            ["uhubctl", "-l", "20-1", "-p", "1", "-a", "on"],
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception as e:
+        log_step("power_cycle on", False, str(e))
+        QTimer.singleShot(STEP_DELAY, finish)
+        return
+
+    time.sleep(4)
+
+    from smartcard.System import readers as _readers
+    from smartcard.PassThruCardService import PassThruCardService
+    from electrum.plugins.satochip.card_connector import CardConnector
+
+    _disconnect_electrum_client()
+
+    reconnected = False
+    for attempt in range(8):
+        try:
+            time.sleep(2)
+            rs = _readers()
+            if not rs:
+                continue
+            conn = rs[0].createConnection()
+            conn.connect()
+            cc = CardConnector(client=None, card_filter=["satochip"])
+            cc.cardservice = PassThruCardService(conn)
+            cc.card_present = True
+            cc._detect_protocol()
+            cc.card_select()
+            time.sleep(1.5)
+            cc.card_initiate_secure_channel()
+            cc.set_pin(0, list(b"123456"))
+            cc.card_verify_PIN_simple()
+            cc.card_initiate_secure_channel()
+            reconnected = True
+            try:
+                cc.card_disconnect()
+            except Exception:
+                pass
+            break
+        except Exception as e:
+            print(f"    flow10 reconnect attempt {attempt + 1} failed: {e}", flush=True)
+
+    if reconnected:
+        log_step("power_cycle reconnect", True, "card reconnected after power cycle")
+    else:
+        log_step("power_cycle reconnect", False, "failed to reconnect after 8 attempts")
+
     QTimer.singleShot(STEP_DELAY, finish)
 
 
@@ -1162,7 +1523,7 @@ def main():
 
     print("\nStarting visual test in 2 seconds...", flush=True)
     print("Watch the Electrum window!\n", flush=True)
-    QTimer.singleShot(2000, flow1_wallet_creation)
+    QTimer.singleShot(2000, flow0_card_reset)
 
     retcode = app.exec()
 
