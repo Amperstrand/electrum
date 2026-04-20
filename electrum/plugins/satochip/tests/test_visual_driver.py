@@ -12,6 +12,18 @@ import os
 import shutil
 import tempfile
 import atexit
+import subprocess
+
+# Kill any previous instances of this test script to avoid zombie Electrum windows.
+_my_pid = os.getpid()
+try:
+    _out = subprocess.check_output(["pgrep", "-f", "test_visual_driver.py"], text=True)
+    for _pid_str in _out.strip().split("\n"):
+        _pid = int(_pid_str.strip())
+        if _pid != _my_pid:
+            os.kill(_pid, 9)
+except Exception:
+    pass
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
@@ -781,7 +793,7 @@ def flow4_show_address():
     print("\n--- Flow 4: Show Address ---", flush=True)
     if wallet_window is None:
         log_step("show address", False, "no wallet window")
-        QTimer.singleShot(STEP_DELAY, flow5_change_label)
+        QTimer.singleShot(STEP_DELAY, flow8_sign_transaction)
         return
 
     try:
@@ -793,7 +805,7 @@ def flow4_show_address():
         addresses = wallet.get_receiving_addresses()
         if not addresses:
             log_step("show address", False, "no receiving addresses")
-            QTimer.singleShot(STEP_DELAY, flow5_change_label)
+            QTimer.singleShot(STEP_DELAY, flow8_sign_transaction)
             return
 
         address = addresses[0]
@@ -818,6 +830,180 @@ def flow4_show_address():
             )
     except Exception as e:
         log_step("show address", False, str(e))
+
+    QTimer.singleShot(STEP_DELAY, flow8_sign_transaction)
+
+
+# -- Flow 8: Sign Transaction --
+
+
+def flow8_sign_transaction():
+    print("\n--- Flow 8: Sign Transaction ---", flush=True)
+    if wallet_window is None:
+        log_step("sign transaction", False, "no wallet window")
+        QTimer.singleShot(STEP_DELAY, flow9_status_bar)
+        return
+
+    try:
+        import struct
+        import hashlib
+        from electrum.plugins.satochip.satochip import _bip32path2bytes
+        from electrum.crypto import hash_160
+
+        wallet = wallet_window.wallet
+        keystore = wallet.keystore
+        client = keystore.get_client()
+        addresses = wallet.get_receiving_addresses()
+        if not addresses:
+            log_step("sign transaction", False, "no receiving addresses")
+            QTimer.singleShot(STEP_DELAY, flow9_status_bar)
+            return
+
+        address = addresses[0]
+        sequence = wallet.get_address_index(address)
+        derivation_prefix = keystore.get_derivation_prefix()
+
+        # Build BIP32 bytepath for the input key
+        bytepath = _bip32path2bytes(derivation_prefix + "/%d/%d" % sequence)[1]
+        (pubkey, _chaincode) = client.cc.card_bip32_get_extendedkey(bytepath)
+
+        # Construct BIP-143 segwit preimage (what card_parse_transaction expects)
+        pubkey_bytes = pubkey.get_public_key_bytes(compressed=True)
+        pkh = hash_160(pubkey_bytes)
+        # p2wpkh scriptcode: OP_DUP OP_HASH160 OP_PUSH20 <hash160> OP_EQUALVERIFY OP_CHECKSIG
+        scriptcode = bytes([0x76, 0xA9, 0x14]) + pkh + bytes([0x88, 0xAC])
+
+        hash_prevouts = hashlib.sha256(hashlib.sha256(b"\x00" * 36).digest()).digest()
+        hash_sequence = hashlib.sha256(
+            hashlib.sha256(struct.pack("<I", 0xFFFFFFFF)).digest()
+        ).digest()
+        output_script = bytes([0x00, 0x14]) + pkh
+        output_entry = (
+            struct.pack("<Q", 100000000) + bytes([len(output_script)]) + output_script
+        )
+        hash_outputs = hashlib.sha256(hashlib.sha256(output_entry).digest()).digest()
+
+        raw_tx = b""
+        raw_tx += struct.pack("<I", 1)  # version
+        raw_tx += hash_prevouts  # hashPrevouts (32)
+        raw_tx += hash_sequence  # hashSequence (32)
+        raw_tx += b"\x00" * 32  # prevout txid (fake)
+        raw_tx += struct.pack("<I", 0)  # prevout index
+        raw_tx += bytes([len(scriptcode)])  # scriptcode varint
+        raw_tx += scriptcode  # scriptcode
+        raw_tx += struct.pack("<Q", 100000000)  # amount (1 BTC)
+        raw_tx += struct.pack("<I", 0xFFFFFFFF)  # nSequence
+        raw_tx += hash_outputs  # hashOutputs (32)
+        raw_tx += struct.pack("<I", 0)  # nLocktime
+        raw_tx += struct.pack("<I", 1)  # nHashType: SIGHASH_ALL
+
+        # Parse tx on card to get tx_hash
+        (response, sw1, sw2, tx_hash, needs_2fa) = client.cc.card_parse_transaction(
+            raw_tx, is_segwit=True
+        )
+
+        # Verify tx_hash matches local double-SHA256
+        local_hash = hashlib.sha256(hashlib.sha256(raw_tx).digest()).digest()
+        card_hash = bytes(tx_hash)
+        hash_match = local_hash == card_hash
+
+        if not hash_match:
+            log_step(
+                "sign transaction hash",
+                False,
+                "local=%s card=%s" % (local_hash.hex()[:16], card_hash.hex()[:16]),
+            )
+            QTimer.singleShot(STEP_DELAY, flow9_status_bar)
+            return
+
+        # Sign with card (PIN already verified from earlier flows)
+        (tx_sig_der, sw1, sw2) = client.cc.card_sign_transaction(0xFF, tx_hash)
+
+        if sw1 != 0x90 or sw2 != 0x00:
+            log_step(
+                "sign transaction",
+                False,
+                "card_sign_transaction SW=%02X%02X" % (sw1, sw2),
+            )
+            QTimer.singleShot(STEP_DELAY, flow9_status_bar)
+            return
+
+        # Verify DER signature validity
+        from electrum_ecc import get_r_and_s_from_ecdsa_der_sig, CURVE_ORDER
+
+        der_bytes = bytes(tx_sig_der)
+        r, s = get_r_and_s_from_ecdsa_der_sig(der_bytes)
+        sig_valid = 0 < s < CURVE_ORDER and 0 < r < CURVE_ORDER
+
+        if sig_valid and hash_match:
+            log_step(
+                "sign transaction",
+                True,
+                "DER sig valid, hash match, len=%d" % len(der_bytes),
+            )
+        else:
+            log_step(
+                "sign transaction",
+                False,
+                "sig_valid=%s hash_match=%s" % (sig_valid, hash_match),
+            )
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        log_step("sign transaction", False, str(e))
+
+    QTimer.singleShot(STEP_DELAY, flow9_status_bar)
+
+
+# -- Flow 9: Status Bar Button --
+
+
+def flow9_status_bar():
+    print("\n--- Flow 9: Status Bar Button ---", flush=True)
+    if wallet_window is None:
+        log_step("status bar button", False, "no wallet window")
+        QTimer.singleShot(STEP_DELAY, flow5_change_label)
+        return
+
+    try:
+        from PyQt6.QtWidgets import QToolButton
+
+        status_bar = wallet_window.statusBar()
+        if status_bar is None:
+            log_step("status bar button", False, "no status bar")
+            QTimer.singleShot(STEP_DELAY, flow5_change_label)
+            return
+
+        # Look for satochip button in status bar children
+        found = False
+        tooltip = ""
+        for child in status_bar.findChildren((QPushButton, QToolButton)):
+            text = child.text().lower() if child.text() else ""
+            tip = child.toolTip().lower() if child.toolTip() else ""
+            if "satochip" in text or "satochip" in tip:
+                found = True
+                tooltip = child.toolTip() or child.text()
+                break
+
+        # Fallback: check hw_device_buttons
+        if not found and hasattr(wallet_window, "hw_device_buttons"):
+            for btn in wallet_window.hw_device_buttons:
+                text = btn.text().lower() if btn.text() else ""
+                tip = btn.toolTip().lower() if btn.toolTip() else ""
+                if "satochip" in text or "satochip" in tip:
+                    found = True
+                    tooltip = btn.toolTip() or btn.text()
+                    break
+
+        if found:
+            log_step("status bar button", True, "tooltip=%s" % tooltip[:40])
+        else:
+            log_step(
+                "status bar button", False, "no satochip button found in status bar"
+            )
+    except Exception as e:
+        log_step("status bar button", False, str(e))
 
     QTimer.singleShot(STEP_DELAY, flow5_change_label)
 
