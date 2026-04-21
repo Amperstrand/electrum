@@ -33,8 +33,21 @@ import sys
 import zipfile as zipfile_lib
 from urllib.parse import urlparse
 
-from typing import (NamedTuple, Any, Union, TYPE_CHECKING, Optional, Tuple,
-                    Dict, Iterable, List, Sequence, Callable, TypeVar, Mapping)
+from typing import (
+    NamedTuple,
+    Any,
+    Union,
+    TYPE_CHECKING,
+    Optional,
+    Tuple,
+    Dict,
+    Iterable,
+    List,
+    Sequence,
+    Callable,
+    TypeVar,
+    Mapping,
+)
 import concurrent
 from concurrent.futures import Future
 import zipimport
@@ -46,8 +59,16 @@ from electrum_ecc import ECPrivkey, ECPubkey
 from ._vendor.distutils.version import StrictVersion
 from .version import ELECTRUM_VERSION
 from .i18n import _
-from .util import (profiler, DaemonThread, UserCancelled, ThreadJob, UserFacingException, ChoiceItem,
-                   make_dir, make_aiohttp_session)
+from .util import (
+    profiler,
+    DaemonThread,
+    UserCancelled,
+    ThreadJob,
+    UserFacingException,
+    ChoiceItem,
+    make_dir,
+    make_aiohttp_session,
+)
 from . import bip32
 from . import plugins
 from .simple_config import SimpleConfig
@@ -71,14 +92,15 @@ PLUGIN_PASSWORD_VERSION = 1
 
 
 class Plugins(DaemonThread):
-
     pkgpath = os.path.dirname(plugins.__file__)
     # TODO: use XDG Base Directory Specification instead of hardcoding /etc
-    keyfile_posix = '/etc/electrum/plugins_key'
-    keyfile_windows = r'HKEY_LOCAL_MACHINE\SOFTWARE\Electrum\PluginsKey'
+    keyfile_posix = "/etc/electrum/plugins_key"
+    keyfile_windows = r"HKEY_LOCAL_MACHINE\SOFTWARE\Electrum\PluginsKey"
 
     @profiler
-    def __init__(self, config: SimpleConfig, gui_name: str = None, cmd_only: bool = False):
+    def __init__(
+        self, config: SimpleConfig, gui_name: str = None, cmd_only: bool = False
+    ):
         self.config = config
         self.cmd_only = cmd_only  # type: bool
         self.internal_plugin_metadata = {}
@@ -91,7 +113,7 @@ class Plugins(DaemonThread):
             return
         DaemonThread.__init__(self)
         self.device_manager = DeviceMgr(config)
-        self.name = 'Plugins'  # set name of thread
+        self.name = "Plugins"  # set name of thread
         self._hw_wallets = {}
         self.plugins = {}  # type: Dict[str, BasePlugin]
         self.gui_name = gui_name
@@ -102,7 +124,10 @@ class Plugins(DaemonThread):
 
     @property
     def descriptions(self):
-        return dict(list(self.internal_plugin_metadata.items()) + list(self.external_plugin_metadata.items()))
+        return dict(
+            list(self.internal_plugin_metadata.items())
+            + list(self.external_plugin_metadata.items())
+        )
 
     def find_directory_plugins(self, pkg_path: str, external: bool):
         """Finds plugins in directory form from the given pkg_path and populates the metadata dicts"""
@@ -114,28 +139,33 @@ class Plugins(DaemonThread):
             if loader.__class__.__qualname__ == "PyiFrozenImporter":
                 continue
             module_path = os.path.join(pkg_path, name)
-            if self.cmd_only and not self.config.get(f'plugins.{name}.enabled') is True:
+            if self.cmd_only and not self.config.get(f"plugins.{name}.enabled") is True:
                 continue
             try:
-                with open(os.path.join(module_path, 'manifest.json'), 'r') as f:
+                with open(os.path.join(module_path, "manifest.json"), "r") as f:
                     d = json.load(f)
             except FileNotFoundError:
-                self.logger.info(f"could not find manifest.json of plugin {name}, skipping...")
+                self.logger.info(
+                    f"could not find manifest.json of plugin {name}, skipping..."
+                )
                 continue
-            if 'fullname' not in d:
+            if "fullname" not in d:
                 continue
-            d['path'] = module_path
+            d["path"] = module_path
             if not self.cmd_only:
-                gui_good = self.gui_name in d.get('available_for', [])
+                gui_good = self.gui_name in d.get("available_for", [])
                 if not gui_good:
                     continue
-                details = d.get('registers_wallet_type')
+                details = d.get("registers_wallet_type")
                 if details:
                     self.register_wallet_type(name, gui_good, details)
-                details = d.get('registers_keystore')
+                details = d.get("registers_keystore")
                 if details:
                     self.register_keystore(name, details)
-            if name in self.internal_plugin_metadata or name in self.external_plugin_metadata:
+            if (
+                name in self.internal_plugin_metadata
+                or name in self.external_plugin_metadata
+            ):
                 _logger.info(f"Found the following plugin modules: {iter_modules=}")
                 _logger.info(f"duplicate plugins? for {name=}")
                 continue
@@ -147,7 +177,9 @@ class Plugins(DaemonThread):
     @staticmethod
     def exec_module_from_spec(spec, path: str):
         if prev_fail := _exec_module_failure.get(path):
-            raise Exception(f"exec_module already failed once before, with: {prev_fail!r}")
+            raise Exception(
+                f"exec_module already failed once before, with: {prev_fail!r}"
+            )
         try:
             module = importlib.util.module_from_spec(spec)
             # sys.modules needs to be modified for relative imports to work
@@ -176,8 +208,12 @@ class Plugins(DaemonThread):
                     self.find_zip_plugins(pkg_path=pkg_path, external=external)
 
     def load_plugins(self):
-        for name, d in chain(self.internal_plugin_metadata.items(), self.external_plugin_metadata.items()):
-            if not d.get('requires_wallet_type') and self.config.get(f'plugins.{name}.enabled'):
+        for name, d in chain(
+            self.internal_plugin_metadata.items(), self.external_plugin_metadata.items()
+        ):
+            if not d.get("requires_wallet_type") and self.config.get(
+                f"plugins.{name}.enabled"
+            ):
                 try:
                     if self.cmd_only:  # only load init method to register commands
                         self.maybe_load_plugin_init_method(name)
@@ -190,32 +226,40 @@ class Plugins(DaemonThread):
         return os.stat(path).st_uid == 0 and not os.access(path, os.W_OK)
 
     def get_keyfile_path(self, key_hex: Optional[str]) -> Tuple[str, str]:
-        if sys.platform in ['windows', 'win32']:
+        if sys.platform in ["windows", "win32"]:
             keyfile_path = self.keyfile_windows
-            keyfile_help = _('This file can be edited with Regedit')
-        elif 'ANDROID_DATA' in os.environ:
-            raise Exception('platform not supported')
+            keyfile_help = _("This file can be edited with Regedit")
+        elif "ANDROID_DATA" in os.environ:
+            raise Exception("platform not supported")
         else:
             # treat unknown platforms and macOS as linux-like
             keyfile_path = self.keyfile_posix
-            keyfile_help = "" if not key_hex else "".join([
-                                         _('The file must have root permissions'),
-                                         ".\n\n",
-                                         _("To set it you can also use the Auto-Setup or run "
-                                           "the following terminal command"),
-                                         ":\n\n",
-                                         f"sudo sh -c \"{self._posix_plugin_key_creation_command(key_hex)}\"",
-            ])
+            keyfile_help = (
+                ""
+                if not key_hex
+                else "".join(
+                    [
+                        _("The file must have root permissions"),
+                        ".\n\n",
+                        _(
+                            "To set it you can also use the Auto-Setup or run "
+                            "the following terminal command"
+                        ),
+                        ":\n\n",
+                        f'sudo sh -c "{self._posix_plugin_key_creation_command(key_hex)}"',
+                    ]
+                )
+            )
         return keyfile_path, keyfile_help
 
     def try_auto_key_setup(self, pubkey_hex: str) -> bool:
         """Can be called from the GUI to store the plugin pubkey as root/admin user"""
         try:
-            if sys.platform in ['windows', 'win32']:
+            if sys.platform in ["windows", "win32"]:
                 self._write_key_to_regedit_windows(pubkey_hex)
-            elif 'ANDROID_DATA' in os.environ:
-                raise Exception('platform not supported')
-            elif sys.platform.startswith('darwin'):  # macOS
+            elif "ANDROID_DATA" in os.environ:
+                raise Exception("platform not supported")
+            elif sys.platform.startswith("darwin"):  # macOS
                 self._write_key_to_root_file_macos(pubkey_hex)
             else:
                 self._write_key_to_root_file_linux(pubkey_hex)
@@ -226,16 +270,16 @@ class Plugins(DaemonThread):
 
     def try_auto_key_reset(self) -> bool:
         try:
-            if sys.platform in ['windows', 'win32']:
+            if sys.platform in ["windows", "win32"]:
                 self._delete_plugin_key_from_windows_registry()
-            elif 'ANDROID_DATA' in os.environ:
-                raise Exception('platform not supported')
-            elif sys.platform.startswith('darwin'):  # macOS
+            elif "ANDROID_DATA" in os.environ:
+                raise Exception("platform not supported")
+            elif sys.platform.startswith("darwin"):  # macOS
                 self._delete_macos_plugin_keyfile()
             else:
                 self._delete_linux_plugin_keyfile()
         except Exception:
-            self.logger.exception(f'auto-reset of plugin key failed')
+            self.logger.exception(f"auto-reset of plugin key failed")
             return False
         return True
 
@@ -243,10 +287,10 @@ class Plugins(DaemonThread):
         """creates the dir (dir_path), writes the key in file, and sets permissions to 644"""
         dir_path: str = os.path.dirname(self.keyfile_posix)
         sh_command = (
-                     f"mkdir -p {dir_path} "  # create the /etc/electrum dir
-                     f"&& printf '%s' '{pubkey_hex}' > {self.keyfile_posix} "  # write the key to the file
-                     f"&& chmod 644 {self.keyfile_posix} "  # set read permissions for the file
-                     f"&& chmod 755 {dir_path}"  # set read permissions for the dir
+            f"mkdir -p {dir_path} "  # create the /etc/electrum dir
+            f"&& printf '%s' '{pubkey_hex}' > {self.keyfile_posix} "  # write the key to the file
+            f"&& chmod 644 {self.keyfile_posix} "  # set read permissions for the file
+            f"&& chmod 755 {dir_path}"  # set read permissions for the dir
         )
         return sh_command
 
@@ -267,7 +311,7 @@ class Plugins(DaemonThread):
                 "\n": "\\n",
                 "\r": "\\r",
                 "\t": "\\t",
-                "\"": "\\\"",
+                '"': '\\"',
                 "\\": "\\\\",
             }
             return '"%s"' % "".join(charmap.get(char, char) for char in string)
@@ -277,8 +321,7 @@ class Plugins(DaemonThread):
             "-e",
             "do shell script %s "
             "with administrator privileges "
-            "without altering line endings"
-            % quote_applescript(quote_shell(commands))
+            "without altering line endings" % quote_applescript(quote_shell(commands)),
         ]
         return commands
 
@@ -295,29 +338,29 @@ class Plugins(DaemonThread):
         # https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-shellexecuteinfoa
         class SHELLEXECUTEINFO(Structure):
             _fields_ = [
-                ('cbSize', DWORD),
-                ('fMask', c_ulong),
-                ('hwnd', HWND),
-                ('lpVerb', LPCWSTR),
-                ('lpFile', LPCWSTR),
-                ('lpParameters', LPCWSTR),
-                ('lpDirectory', LPCWSTR),
-                ('nShow', c_ulong),
-                ('hInstApp', HINSTANCE),
-                ('lpIDList', c_ulong),
-                ('lpClass', LPCWSTR),
-                ('hkeyClass', HKEY),
-                ('dwHotKey', DWORD),
-                ('hIcon', HANDLE),
-                ('hProcess', HANDLE)
+                ("cbSize", DWORD),
+                ("fMask", c_ulong),
+                ("hwnd", HWND),
+                ("lpVerb", LPCWSTR),
+                ("lpFile", LPCWSTR),
+                ("lpParameters", LPCWSTR),
+                ("lpDirectory", LPCWSTR),
+                ("nShow", c_ulong),
+                ("hInstApp", HINSTANCE),
+                ("lpIDList", c_ulong),
+                ("lpClass", LPCWSTR),
+                ("hkeyClass", HKEY),
+                ("dwHotKey", DWORD),
+                ("hIcon", HANDLE),
+                ("hProcess", HANDLE),
             ]
 
         info = SHELLEXECUTEINFO()
         info.cbSize = sizeof(SHELLEXECUTEINFO)
-        info.fMask = 0x00000040 # SEE_MASK_NOCLOSEPROCESS (so we can check the result of the process)
+        info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS (so we can check the result of the process)
         info.hwnd = None
-        info.lpVerb = 'runas'  # run as administrator
-        info.lpFile = 'reg.exe'  # the executable to run
+        info.lpVerb = "runas"  # run as administrator
+        info.lpFile = "reg.exe"  # the executable to run
         info.lpParameters = reg_exe_command  # the registry edit command
         info.lpDirectory = None
         info.nShow = 1
@@ -325,7 +368,7 @@ class Plugins(DaemonThread):
         # Execute and wait
         if not windll.shell32.ShellExecuteExW(byref(info)):
             error = windll.kernel32.GetLastError()
-            raise Exception(f'Error executing registry command: {error}')
+            raise Exception(f"Error executing registry command: {error}")
 
         # block until the process is done or 5 sec timeout
         windll.kernel32.WaitForSingleObject(info.hProcess, 0x1338)
@@ -339,6 +382,7 @@ class Plugins(DaemonThread):
         Executes the given commands in a subprocess and asserts that it was successful.
         """
         import subprocess
+
         with subprocess.Popen(
             commands,
             stdout=subprocess.PIPE,
@@ -347,7 +391,9 @@ class Plugins(DaemonThread):
         ) as process:
             stdout, stderr = process.communicate()
             if process.returncode != 0:
-                raise Exception(f'error executing command ({process.returncode}): {stderr}')
+                raise Exception(
+                    f"error executing command ({process.returncode}): {stderr}"
+                )
 
     def _write_key_to_root_file_linux(self, key_hex: str) -> None:
         """
@@ -358,29 +404,33 @@ class Plugins(DaemonThread):
         assert os.path.exists("/etc"), "System does not have /etc directory"
 
         sh_command: str = self._posix_plugin_key_creation_command(key_hex)
-        commands = ['pkexec', 'sh', '-c', sh_command]
+        commands = ["pkexec", "sh", "-c", sh_command]
         self._execute_commands_in_subprocess(commands)
 
         # check if the key was written correctly
-        with open(self.keyfile_posix, 'r') as f:
-            assert f.read() == key_hex, f'file content mismatch: {f.read()} != {key_hex}'
-        self.logger.debug(f'file saved successfully to {self.keyfile_posix}')
+        with open(self.keyfile_posix, "r") as f:
+            assert f.read() == key_hex, (
+                f"file content mismatch: {f.read()} != {key_hex}"
+            )
+        self.logger.debug(f"file saved successfully to {self.keyfile_posix}")
 
     def _delete_linux_plugin_keyfile(self) -> None:
         """
         Deletes the root owned key file at self.keyfile_posix.
         """
         if not os.path.exists(self.keyfile_posix):
-            self.logger.debug(f'file {self.keyfile_posix} does not exist')
+            self.logger.debug(f"file {self.keyfile_posix} does not exist")
             return
         if not self._has_root_permissions(self.keyfile_posix):
             os.unlink(self.keyfile_posix)
             return
 
         # use pkexec to delete the file as root user
-        commands = ['pkexec', 'rm', self.keyfile_posix]
+        commands = ["pkexec", "rm", self.keyfile_posix]
         self._execute_commands_in_subprocess(commands)
-        assert not os.path.exists(self.keyfile_posix), f'file {self.keyfile_posix} still exists'
+        assert not os.path.exists(self.keyfile_posix), (
+            f"file {self.keyfile_posix} still exists"
+        )
 
     def _write_key_to_root_file_macos(self, key_hex: str) -> None:
         assert os.path.exists("/etc"), "System does not have /etc directory"
@@ -389,13 +439,15 @@ class Plugins(DaemonThread):
         macos_commands = self._get_macos_osascript_command(["sh", "-c", sh_command])
 
         self._execute_commands_in_subprocess(macos_commands)
-        with open(self.keyfile_posix, 'r') as f:
-            assert f.read() == key_hex, f'file content mismatch: {f.read()} != {key_hex}'
-        self.logger.debug(f'file saved successfully to {self.keyfile_posix}')
+        with open(self.keyfile_posix, "r") as f:
+            assert f.read() == key_hex, (
+                f"file content mismatch: {f.read()} != {key_hex}"
+            )
+        self.logger.debug(f"file saved successfully to {self.keyfile_posix}")
 
     def _delete_macos_plugin_keyfile(self) -> None:
         if not os.path.exists(self.keyfile_posix):
-            self.logger.debug(f'file {self.keyfile_posix} does not exist')
+            self.logger.debug(f"file {self.keyfile_posix} does not exist")
             return
         if not self._has_root_permissions(self.keyfile_posix):
             os.unlink(self.keyfile_posix)
@@ -403,7 +455,9 @@ class Plugins(DaemonThread):
         # use osascript to delete the file as root user
         macos_commands = self._get_macos_osascript_command(["rm", self.keyfile_posix])
         self._execute_commands_in_subprocess(macos_commands)
-        assert not os.path.exists(self.keyfile_posix), f'file {self.keyfile_posix} still exists'
+        assert not os.path.exists(self.keyfile_posix), (
+            f"file {self.keyfile_posix} still exists"
+        )
 
     def _write_key_to_regedit_windows(self, key_hex: str) -> None:
         """
@@ -411,16 +465,18 @@ class Plugins(DaemonThread):
         """
         from winreg import ConnectRegistry, OpenKey, QueryValue, HKEY_LOCAL_MACHINE
 
-        value_type = 'REG_SZ'
+        value_type = "REG_SZ"
         command = f'add "{self.keyfile_windows}" /ve /t {value_type} /d "{key_hex}" /f'
 
         self._run_win_regedit_as_admin(command)
 
         # check if the key was written correctly
         with ConnectRegistry(None, HKEY_LOCAL_MACHINE) as hkey:
-            with OpenKey(hkey, r'SOFTWARE\Electrum') as key:
-                assert key_hex == QueryValue(key, 'PluginsKey'), "incorrect registry key value"
-        self.logger.debug(f'key saved successfully to {self.keyfile_windows}')
+            with OpenKey(hkey, r"SOFTWARE\Electrum") as key:
+                assert key_hex == QueryValue(key, "PluginsKey"), (
+                    "incorrect registry key value"
+                )
+        self.logger.debug(f"key saved successfully to {self.keyfile_windows}")
 
     def _delete_plugin_key_from_windows_registry(self) -> None:
         """
@@ -434,12 +490,14 @@ class Plugins(DaemonThread):
         try:
             # do a sanity check to see if the key has been deleted
             with ConnectRegistry(None, HKEY_LOCAL_MACHINE) as hkey:
-                with OpenKey(hkey, r'SOFTWARE\Electrum\PluginsKey'):
-                    raise Exception(f'Key {self.keyfile_windows} still exists, deletion failed')
+                with OpenKey(hkey, r"SOFTWARE\Electrum\PluginsKey"):
+                    raise Exception(
+                        f"Key {self.keyfile_windows} still exists, deletion failed"
+                    )
         except FileNotFoundError:
             pass
 
-    def create_new_key(self, password:str) -> str:
+    def create_new_key(self, password: str) -> str:
         salt = os.urandom(32)
         privkey = self.derive_privkey(password, salt)
         pubkey = privkey.get_public_key_bytes()
@@ -451,16 +509,17 @@ class Plugins(DaemonThread):
         returns pubkey, salt
         returns None, None if the pubkey has not been set
         """
-        if sys.platform in ['windows', 'win32']:
+        if sys.platform in ["windows", "win32"]:
             import winreg
+
             with winreg.ConnectRegistry(None, winreg.HKEY_LOCAL_MACHINE) as hkey:
                 try:
                     with winreg.OpenKey(hkey, r"SOFTWARE\\Electrum") as key:
                         key_hex = winreg.QueryValue(key, "PluginsKey")
                 except Exception as e:
-                    self.logger.info(f'winreg error: {e}')
+                    self.logger.info(f"winreg error: {e}")
                     return None, None
-        elif 'ANDROID_DATA' in os.environ:
+        elif "ANDROID_DATA" in os.environ:
             return None, None
         else:
             # treat unknown platforms as linux-like
@@ -474,18 +533,18 @@ class Plugins(DaemonThread):
             key = bytes.fromhex(key_hex)
             version = key[0]
         except Exception:
-            self.logger.exception(f'{key_hex=} invalid')
+            self.logger.exception(f"{key_hex=} invalid")
             return None, None
         if version != PLUGIN_PASSWORD_VERSION:
-            self.logger.info(f'unknown plugin password version: {version}')
+            self.logger.info(f"unknown plugin password version: {version}")
             return None, None
         # all good
-        salt = key[1:1+32]
-        pubkey = key[1+32:]
+        salt = key[1 : 1 + 32]
+        pubkey = key[1 + 32 :]
         return pubkey, salt
 
     def get_external_plugin_dir(self) -> str:
-        pkg_path = os.path.join(self.config.electrum_path(), 'plugins')
+        pkg_path = os.path.join(self.config.electrum_path(), "plugins")
         make_dir(pkg_path)
         return pkg_path
 
@@ -500,29 +559,29 @@ class Plugins(DaemonThread):
         async with make_aiohttp_session(proxy=proxy) as session:
             async with session.get(url) as resp:
                 if resp.status == 200:
-                    with open(path, 'wb') as fd:
+                    with open(path, "wb") as fd:
                         async for chunk in resp.content.iter_chunked(10):
                             fd.write(chunk)
         return path
 
     def read_manifest(self, path) -> dict:
-        """ return json dict """
+        """return json dict"""
         with zipfile_lib.ZipFile(path) as file:
             for filename in file.namelist():
-                if filename.endswith('manifest.json'):
+                if filename.endswith("manifest.json"):
                     break
             else:
-                raise Exception('could not find manifest.json in zip archive')
-            with file.open(filename, 'r') as f:
+                raise Exception("could not find manifest.json in zip archive")
+            with file.open(filename, "r") as f:
                 manifest = json.load(f)
-                manifest['path'] = path  # external, path of the zipfile
-                manifest['dirname'] = os.path.dirname(filename)  # internal
-                manifest['is_zip'] = True
-                manifest['zip_hash_sha256'] = get_file_hash256(path).hex()
+                manifest["path"] = path  # external, path of the zipfile
+                manifest["dirname"] = os.path.dirname(filename)  # internal
+                manifest["is_zip"] = True
+                manifest["zip_hash_sha256"] = get_file_hash256(path).hex()
                 return manifest
 
     def zip_plugin_path(self, name) -> str:
-        path = self.get_metadata(name)['path']
+        path = self.get_metadata(name)["path"]
         filename = os.path.basename(path)
         if name in self.internal_plugin_metadata:
             pkg_path = self.pkgpath
@@ -536,35 +595,49 @@ class Plugins(DaemonThread):
             return
         for filename in os.listdir(pkg_path):
             path = os.path.join(pkg_path, filename)
-            if not filename.endswith('.zip'):
+            if not filename.endswith(".zip"):
                 continue
             try:
                 d = self.read_manifest(path)
-                name = d['name']
+                name = d["name"]
             except Exception:
-                self.logger.info(f"could not load manifest.json from zip plugin {filename}", exc_info=True)
+                self.logger.info(
+                    f"could not load manifest.json from zip plugin {filename}",
+                    exc_info=True,
+                )
                 continue
-            if name in self.internal_plugin_metadata or name in self.external_plugin_metadata:
+            if (
+                name in self.internal_plugin_metadata
+                or name in self.external_plugin_metadata
+            ):
                 self.logger.info(f"duplicate plugins for {name=}")
                 continue
-            if self.cmd_only and not self.config.get(f'plugins.{name}.enabled'):
+            if self.cmd_only and not self.config.get(f"plugins.{name}.enabled"):
                 continue
-            min_version = d.get('min_electrum_version')
-            if min_version and StrictVersion(min_version) > StrictVersion(ELECTRUM_VERSION):
-                self.logger.info(f"version mismatch for zip plugin {filename}", exc_info=True)
+            min_version = d.get("min_electrum_version")
+            if min_version and StrictVersion(min_version) > StrictVersion(
+                ELECTRUM_VERSION
+            ):
+                self.logger.info(
+                    f"version mismatch for zip plugin {filename}", exc_info=True
+                )
                 continue
-            max_version = d.get('max_electrum_version')
-            if max_version and StrictVersion(max_version) < StrictVersion(ELECTRUM_VERSION):
-                self.logger.info(f"version mismatch for zip plugin {filename}", exc_info=True)
+            max_version = d.get("max_electrum_version")
+            if max_version and StrictVersion(max_version) < StrictVersion(
+                ELECTRUM_VERSION
+            ):
+                self.logger.info(
+                    f"version mismatch for zip plugin {filename}", exc_info=True
+                )
                 continue
 
             if not self.cmd_only:
-                gui_good = self.gui_name in d.get('available_for', [])
+                gui_good = self.gui_name in d.get("available_for", [])
                 if not gui_good:
                     continue
-                if 'fullname' not in d:
+                if "fullname" not in d:
                     continue
-                details = d.get('registers_keystore')
+                details = d.get("registers_keystore")
                 if details:
                     self.register_keystore(name, details)
             if external:
@@ -578,7 +651,7 @@ class Plugins(DaemonThread):
     def count(self):
         return len(self.plugins)
 
-    def load_plugin(self, name) -> 'BasePlugin':
+    def load_plugin(self, name) -> "BasePlugin":
         """Imports the code of the given plugin.
         note: can be called from any thread.
         """
@@ -591,26 +664,30 @@ class Plugins(DaemonThread):
         """Loads the __init__.py module of the plugin if it is not already loaded."""
         if not self.is_authorized(name):
             return
-        base_name = ('electrum_external_plugins.' if self.is_external(name) else 'electrum.plugins.') + name
+        base_name = (
+            "electrum_external_plugins."
+            if self.is_external(name)
+            else "electrum.plugins."
+        ) + name
         if base_name not in sys.modules:
             metadata = self.get_metadata(name)
-            is_zip = metadata.get('is_zip', False)
+            is_zip = metadata.get("is_zip", False)
             # if the plugin was not enabled on startup the init module hasn't been loaded yet
             if not is_zip:
                 if self.is_external(name):
                     # this branch is deprecated: external plugins are always zip files
-                    path = os.path.join(metadata['path'], '__init__.py')
+                    path = os.path.join(metadata["path"], "__init__.py")
                     init_spec = importlib.util.spec_from_file_location(base_name, path)
                 else:
                     init_spec = importlib.util.find_spec(base_name)
             else:
-                zipfile = zipimport.zipimporter(metadata['path'])
-                dirname = metadata['dirname']
+                zipfile = zipimport.zipimporter(metadata["path"])
+                dirname = metadata["dirname"]
                 init_spec = zipfile.find_spec(dirname)
 
             self.exec_module_from_spec(init_spec, base_name)
 
-    def load_plugin_by_name(self, name: str) -> Optional['BasePlugin']:
+    def load_plugin_by_name(self, name: str) -> Optional["BasePlugin"]:
         if not self.is_authorized(name):
             return None
         if name in self.plugins:
@@ -619,13 +696,15 @@ class Plugins(DaemonThread):
         self.maybe_load_plugin_init_method(name)
         is_external = self.is_external(name)
         if not is_external:
-            full_name = f'electrum.plugins.{name}.{self.gui_name}'
+            full_name = f"electrum.plugins.{name}.{self.gui_name}"
         else:
-            full_name = f'electrum_external_plugins.{name}.{self.gui_name}'
+            full_name = f"electrum_external_plugins.{name}.{self.gui_name}"
 
         spec = importlib.util.find_spec(full_name)
         if spec is None:
-            raise RuntimeError(f"{self.gui_name} implementation for {name} plugin not found")
+            raise RuntimeError(
+                f"{self.gui_name} implementation for {name} plugin not found"
+            )
         try:
             module = self.exec_module_from_spec(spec, full_name)
             plugin = module.Plugin(self, self.config, name)
@@ -633,7 +712,9 @@ class Plugins(DaemonThread):
             raise Exception(f"Error loading {name} plugin: {repr(e)}") from e
         self.add_jobs(plugin.thread_jobs())
         self.plugins[name] = plugin
-        self.logger.info(f"loaded plugin {name!r}. (from thread: {threading.current_thread().name!r})")
+        self.logger.info(
+            f"loaded plugin {name!r}. (from thread: {threading.current_thread().name!r})"
+        )
         return plugin
 
     def close_plugin(self, plugin):
@@ -642,12 +723,13 @@ class Plugins(DaemonThread):
     @staticmethod
     def derive_privkey(pw: str, salt: bytes) -> ECPrivkey:
         from hashlib import pbkdf2_hmac
-        secret = pbkdf2_hmac('sha256', pw.encode('utf-8'), salt, iterations=10**5)
+
+        secret = pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, iterations=10**5)
         return ECPrivkey(secret)
 
     def uninstall(self, name: str):
-        if self.config.get(f'plugins.{name}'):
-            self.config.set_key(f'plugins.{name}', None)
+        if self.config.get(f"plugins.{name}"):
+            self.config.set_key(f"plugins.{name}", None)
         if name in self.external_plugin_metadata:
             zipfile = self.zip_plugin_path(name)
             os.unlink(zipfile)
@@ -660,12 +742,19 @@ class Plugins(DaemonThread):
         return name in self.external_plugin_metadata
 
     def is_auto_loaded(self, name):
-        metadata = self.external_plugin_metadata.get(name) or self.internal_plugin_metadata.get(name)
-        return metadata and (metadata.get('registers_keystore') or metadata.get('registers_wallet_type'))
+        metadata = self.external_plugin_metadata.get(
+            name
+        ) or self.internal_plugin_metadata.get(name)
+        return metadata and (
+            metadata.get("registers_keystore") or metadata.get("registers_wallet_type")
+        )
 
     def is_installed(self, name) -> bool:
-        """an external plugin may be installed but not authorized """
-        return (name in self.internal_plugin_metadata or name in self.external_plugin_metadata)
+        """an external plugin may be installed but not authorized"""
+        return (
+            name in self.internal_plugin_metadata
+            or name in self.external_plugin_metadata
+        )
 
     def is_authorized(self, name) -> bool:
         if name in self.internal_plugin_metadata:
@@ -679,7 +768,7 @@ class Plugins(DaemonThread):
             return False
         filename = self.zip_plugin_path(name)
         plugin_hash = get_file_hash256(filename)
-        sig = self.config.get(f'plugins.{name}.authorized')
+        sig = self.config.get(f"plugins.{name}.authorized")
         if not sig:
             return False
         pubkey = ECPubkey(pubkey_bytes)
@@ -691,10 +780,10 @@ class Plugins(DaemonThread):
         plugin_hash = get_file_hash256(filename)
         sig = privkey.ecdsa_sign(plugin_hash)
         value = sig.hex()
-        self.config.set_key(f'plugins.{name}.authorized', value)
-        self.config.set_key(f'plugins.{name}.enabled', True)
+        self.config.set_key(f"plugins.{name}.authorized", value)
+        self.config.set_key(f"plugins.{name}.enabled", True)
 
-    def enable(self, name: str) -> 'BasePlugin':
+    def enable(self, name: str) -> "BasePlugin":
         self.config.enable_plugin(name)
         p = self.get(name)
         if p:
@@ -712,18 +801,18 @@ class Plugins(DaemonThread):
 
     @classmethod
     def is_plugin_enabler_config_key(cls, key: str) -> bool:
-        return key.startswith('plugins.')
+        return key.startswith("plugins.")
 
     def is_available(self, name: str) -> bool:
         d = self.descriptions.get(name)
         if not d:
             return False
-        deps = d.get('requires', [])
+        deps = d.get("requires", [])
         for dep, s in deps:
             try:
                 __import__(dep)
             except ImportError as e:
-                self.logger.warning(f'Plugin {name} unavailable: {repr(e)}')
+                self.logger.warning(f"Plugin {name} unavailable: {repr(e)}")
                 return False
         return True
 
@@ -738,27 +827,29 @@ class Plugins(DaemonThread):
             try:
                 p = self.get_plugin(name)
                 if p.is_available():
-                    out.append(HardwarePluginToScan(
-                        name=name,
-                        description=details[2],
-                        plugin=p,
-                        exception=None))
+                    out.append(
+                        HardwarePluginToScan(
+                            name=name, description=details[2], plugin=p, exception=None
+                        )
+                    )
             except Exception as e:
                 self.logger.exception(f"cannot load plugin for: {name}")
-                out.append(HardwarePluginToScan(
-                    name=name,
-                    description=details[2],
-                    plugin=None,
-                    exception=e))
+                out.append(
+                    HardwarePluginToScan(
+                        name=name, description=details[2], plugin=None, exception=e
+                    )
+                )
         return out
 
     def register_wallet_type(self, name, gui_good, wallet_type):
         from .wallet import register_wallet_type, register_constructor
+
         self.logger.info(f"registering wallet type {(wallet_type, name)}")
 
         def loader():
             plugin = self.get_plugin(name)
             register_constructor(wallet_type, plugin.wallet_class)
+
         register_wallet_type(wallet_type)
         plugin_loaders[wallet_type] = loader
 
@@ -767,12 +858,13 @@ class Plugins(DaemonThread):
 
         def dynamic_constructor(d):
             return self.get_plugin(name).keystore_class(d)
-        if details[0] == 'hardware':
+
+        if details[0] == "hardware":
             self._hw_wallets[name] = details
             self.logger.info(f"registering hardware {name}: {details}")
             register_keystore(details[1], dynamic_constructor)
 
-    def get_plugin(self, name: str) -> 'BasePlugin':
+    def get_plugin(self, name: str) -> "BasePlugin":
         assert self.is_authorized(name)
         if name not in self.plugins:
             self.load_plugin(name)
@@ -782,11 +874,13 @@ class Plugins(DaemonThread):
         """Returns True if the plugin is a zip file"""
         if (metadata := self.get_metadata(name)) is None:
             return False
-        return metadata.get('is_zip', False)
+        return metadata.get("is_zip", False)
 
     def get_metadata(self, name: str) -> Optional[dict]:
         """Returns the metadata of the plugin"""
-        metadata = self.internal_plugin_metadata.get(name) or self.external_plugin_metadata.get(name)
+        metadata = self.internal_plugin_metadata.get(
+            name
+        ) or self.external_plugin_metadata.get(name)
         if not metadata:
             return None
         return metadata
@@ -801,13 +895,13 @@ class Plugins(DaemonThread):
         if self.is_plugin_zip(name):
             plugin_filename = self.zip_plugin_path(name)
             metadata = self.external_plugin_metadata[name]
-            dirname = metadata['dirname']
+            dirname = metadata["dirname"]
             with zipfile_lib.ZipFile(plugin_filename) as myzip:
-                with myzip.open("/".join([dirname,filename])) as myfile:
+                with myzip.open("/".join([dirname, filename])) as myfile:
                     return myfile.read()
         elif name in self.internal_plugin_metadata:
-            path = os.path.join(os.path.dirname(__file__), 'plugins', name, filename)
-            with open(path, 'rb') as myfile:
+            path = os.path.join(os.path.dirname(__file__), "plugins", name, filename)
+            with open(path, "rb") as myfile:
                 return myfile.read()
         else:
             raise Exception(f"plugin not found: {name!r}")
@@ -815,7 +909,7 @@ class Plugins(DaemonThread):
 
 def get_file_hash256(path: str) -> bytes:
     """Get the sha256 hash of a file, similar to `sha256sum`."""
-    with open(path, 'rb') as f:
+    with open(path, "rb") as f:
         return sha256(f.read())
 
 
@@ -843,8 +937,7 @@ def run_hook(name, *args):
 
 
 class BasePlugin(Logger):
-
-    def __init__(self, parent, config: 'SimpleConfig', name):
+    def __init__(self, parent, config: "SimpleConfig", name):
         self.parent = parent  # type: Plugins  # The plugins object
         self.name = name
         self.config = config
@@ -905,22 +998,29 @@ class BasePlugin(Logger):
     def read_file(self, filename: str) -> bytes:
         return self.parent.read_file(self.name, filename)
 
-    def get_storage(self, wallet: 'Abstract_Wallet') -> dict:
+    def get_storage(self, wallet: "Abstract_Wallet") -> dict:
         """Returns a dict which is persisted in the per-wallet database."""
         plugin_storage = wallet.db.get_plugin_storage()
         return plugin_storage.setdefault(self.name, {})
 
 
-class DeviceUnpairableError(UserFacingException): pass
-class HardwarePluginLibraryUnavailable(Exception): pass
-class CannotAutoSelectDevice(Exception): pass
+class DeviceUnpairableError(UserFacingException):
+    pass
+
+
+class HardwarePluginLibraryUnavailable(Exception):
+    pass
+
+
+class CannotAutoSelectDevice(Exception):
+    pass
 
 
 class Device(NamedTuple):
     path: Union[str, bytes]
     interface_number: int
     id_: str
-    product_key: Any   # when using hid, often Tuple[int, int]
+    product_key: Any  # when using hid, often Tuple[int, int]
     usage_page: int
     transport_ui_string: str
 
@@ -931,25 +1031,29 @@ class DeviceInfo(NamedTuple):
     initialized: Optional[bool] = None
     exception: Optional[Exception] = None
     plugin_name: Optional[str] = None  # manufacturer, e.g. "trezor"
-    soft_device_id: Optional[str] = None  # if available, used to distinguish same-type hw devices
+    soft_device_id: Optional[str] = (
+        None  # if available, used to distinguish same-type hw devices
+    )
     model_name: Optional[str] = None  # e.g. "Ledger Nano S"
 
     def label_for_device_select(self) -> str:
-        return (
-            "{label} ({maybe_model}{init}, {transport})"
-            .format(
-                label=self.label or _("An unnamed {}").format(self.plugin_name),
-                init=(_("initialized") if self.initialized else _("wiped")),
-                transport=self.device.transport_ui_string,
-                maybe_model=f"{self.model_name}, " if self.model_name else ""
-            )
+        status = (
+            _("blocked")
+            if self.label and self.label.endswith(" [blocked]")
+            else (_("initialized") if self.initialized else _("wiped"))
+        )
+        return "{label} ({maybe_model}{init}, {transport})".format(
+            label=self.label or _("An unnamed {}").format(self.plugin_name),
+            init=status,
+            transport=self.device.transport_ui_string,
+            maybe_model=f"{self.model_name}, " if self.model_name else "",
         )
 
 
 class HardwarePluginToScan(NamedTuple):
     name: str
     description: str
-    plugin: Optional['HW_PluginBase']
+    plugin: Optional["HW_PluginBase"]
     exception: Optional[Exception]
 
 
@@ -967,22 +1071,23 @@ PLACEHOLDER_HW_CLIENT_LABELS = {None, "", " "}
 # enumeration. Everything that uses hidapi, libusb, etc, MUST run on
 # the following thread:
 _hwd_comms_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=1,
-    thread_name_prefix='hwd_comms_thread'
+    max_workers=1, thread_name_prefix="hwd_comms_thread"
 )
 
 # hidapi needs to be imported from the main thread. Otherwise, at least on macOS,
 # segfaults will follow. (see https://github.com/trezor/cython-hidapi/pull/150#issuecomment-1542391087)
 # To keep it simple, let's just import it now, as we are likely in the main thread here.
 if threading.current_thread() is not threading.main_thread():
-    _logger.warning("expected to be in main thread... hidapi will not be safe to use now!")
+    _logger.warning(
+        "expected to be in main thread... hidapi will not be safe to use now!"
+    )
 try:
     import hid
 except ImportError:
     pass
 
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def run_in_hwd_thread(func: Callable[[], T]) -> T:
@@ -991,13 +1096,14 @@ def run_in_hwd_thread(func: Callable[[], T]) -> T:
     else:
         fut = _hwd_comms_executor.submit(func)
         return fut.result()
-        #except (concurrent.futures.CancelledError, concurrent.futures.TimeoutError) as e:
+        # except (concurrent.futures.CancelledError, concurrent.futures.TimeoutError) as e:
 
 
 def runs_in_hwd_thread(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         return run_in_hwd_thread(partial(func, *args, **kwargs))
+
     return wrapper
 
 
@@ -1073,11 +1179,13 @@ class DeviceMgr(ThreadJob):
             fut = _hwd_comms_executor.submit(client.timeout, cutoff)
             self._ongoing_timeout_checks[client_id] = fut
 
-    def register_devices(self, device_pairs, *, plugin: 'HW_PluginBase'):
+    def register_devices(self, device_pairs, *, plugin: "HW_PluginBase"):
         for pair in device_pairs:
             self._recognised_hardware[pair] = plugin
 
-    def register_vendor_ids(self, vendor_ids: Iterable[int], *, plugin: 'HW_PluginBase'):
+    def register_vendor_ids(
+        self, vendor_ids: Iterable[int], *, plugin: "HW_PluginBase"
+    ):
         for vendor_id in vendor_ids:
             self._recognised_vendor[vendor_id] = plugin
 
@@ -1086,8 +1194,12 @@ class DeviceMgr(ThreadJob):
             self._enumerate_func.add(func)
 
     @runs_in_hwd_thread
-    def create_client(self, device: 'Device', handler: Optional['HardwareHandlerBase'],
-                      plugin: 'HW_PluginBase') -> Optional['HardwareClientBase']:
+    def create_client(
+        self,
+        device: "Device",
+        handler: Optional["HardwareHandlerBase"],
+        plugin: "HW_PluginBase",
+    ) -> Optional["HardwareClientBase"]:
         # Get from cache first
         client = self._client_by_id(device.id_)
         if client:
@@ -1133,14 +1245,16 @@ class DeviceMgr(ThreadJob):
         if client:
             client.close()
 
-    def _client_by_id(self, id_) -> Optional['HardwareClientBase']:
+    def _client_by_id(self, id_) -> Optional["HardwareClientBase"]:
         with self.lock:
             for client, client_id in self.clients.items():
                 if client_id == id_:
                     return client
         return None
 
-    def client_by_id(self, id_, *, scan_now: bool = True) -> Optional['HardwareClientBase']:
+    def client_by_id(
+        self, id_, *, scan_now: bool = True
+    ) -> Optional["HardwareClientBase"]:
         """Returns a client for the device ID if one is registered.  If
         a device is wiped or in bootloader mode pairing is impossible;
         in such cases we communicate by device ID and not wallet."""
@@ -1149,33 +1263,53 @@ class DeviceMgr(ThreadJob):
         return self._client_by_id(id_)
 
     @runs_in_hwd_thread
-    def client_for_keystore(self, plugin: 'HW_PluginBase', handler: Optional['HardwareHandlerBase'],
-                            keystore: 'Hardware_KeyStore',
-                            force_pair: bool, *,
-                            devices: Sequence['Device'] = None,
-                            allow_user_interaction: bool = True) -> Optional['HardwareClientBase']:
+    def client_for_keystore(
+        self,
+        plugin: "HW_PluginBase",
+        handler: Optional["HardwareHandlerBase"],
+        keystore: "Hardware_KeyStore",
+        force_pair: bool,
+        *,
+        devices: Sequence["Device"] = None,
+        allow_user_interaction: bool = True,
+    ) -> Optional["HardwareClientBase"]:
         self.logger.info("getting client for keystore")
         if handler is None:
-            raise Exception(_("Handler not found for {}").format(plugin.name) + '\n' + _("A library is probably missing."))
+            raise Exception(
+                _("Handler not found for {}").format(plugin.name)
+                + "\n"
+                + _("A library is probably missing.")
+            )
         handler.update_status(False)
         pcode = keystore.pairing_code()
         client = None
         # search existing clients first (fast-path)
         if not devices:
-            client = self.client_by_pairing_code(plugin=plugin, pairing_code=pcode, handler=handler, devices=[])
+            client = self.client_by_pairing_code(
+                plugin=plugin, pairing_code=pcode, handler=handler, devices=[]
+            )
         # search clients again, now allowing a (slow) scan
         if client is None:
             if devices is None:
                 devices = self.scan_devices()
-            client = self.client_by_pairing_code(plugin=plugin, pairing_code=pcode, handler=handler, devices=devices)
+            client = self.client_by_pairing_code(
+                plugin=plugin, pairing_code=pcode, handler=handler, devices=devices
+            )
         if client is None and force_pair:
             try:
-                info = self.select_device(plugin, handler, keystore, devices,
-                                          allow_user_interaction=allow_user_interaction)
+                info = self.select_device(
+                    plugin,
+                    handler,
+                    keystore,
+                    devices,
+                    allow_user_interaction=allow_user_interaction,
+                )
             except CannotAutoSelectDevice:
                 pass
             else:
-                client = self.force_pair_keystore(plugin=plugin, handler=handler, info=info, keystore=keystore)
+                client = self.force_pair_keystore(
+                    plugin=plugin, handler=handler, info=info, keystore=keystore
+                )
         if client:
             handler.update_status(True)
             # note: if select_device was called, we might also update label etc here:
@@ -1184,9 +1318,13 @@ class DeviceMgr(ThreadJob):
         return client
 
     def client_by_pairing_code(
-        self, *, plugin: 'HW_PluginBase', pairing_code: str, handler: 'HardwareHandlerBase',
-        devices: Sequence['Device'],
-    ) -> Optional['HardwareClientBase']:
+        self,
+        *,
+        plugin: "HW_PluginBase",
+        pairing_code: str,
+        handler: "HardwareHandlerBase",
+        devices: Sequence["Device"],
+    ) -> Optional["HardwareClientBase"]:
         _id = self.id_by_pairing_code(pairing_code)
         client = self._client_by_id(_id)
         if client:
@@ -1204,11 +1342,11 @@ class DeviceMgr(ThreadJob):
     def force_pair_keystore(
         self,
         *,
-        plugin: 'HW_PluginBase',
-        handler: 'HardwareHandlerBase',
-        info: 'DeviceInfo',
-        keystore: 'Hardware_KeyStore',
-    ) -> 'HardwareClientBase':
+        plugin: "HW_PluginBase",
+        handler: "HardwareHandlerBase",
+        info: "DeviceInfo",
+        keystore: "Hardware_KeyStore",
+    ) -> "HardwareClientBase":
         xpub = keystore.xpub
         derivation = keystore.get_derivation_prefix()
         assert derivation is not None
@@ -1232,20 +1370,23 @@ class DeviceMgr(ThreadJob):
         # The user input has wrong PIN or passphrase, or cancelled input,
         # or it is not pairable
         raise DeviceUnpairableError(
-            _('Electrum cannot pair with your {}.\n\n'
-              'Before you request bitcoins to be sent to addresses in this '
-              'wallet, ensure you can pair with your device, or that you have '
-              'its seed (and passphrase, if any).  Otherwise all bitcoins you '
-              'receive will be unspendable.').format(plugin.device))
+            _(
+                "Electrum cannot pair with your {}.\n\n"
+                "Before you request bitcoins to be sent to addresses in this "
+                "wallet, ensure you can pair with your device, or that you have "
+                "its seed (and passphrase, if any).  Otherwise all bitcoins you "
+                "receive will be unspendable."
+            ).format(plugin.device)
+        )
 
     def list_pairable_device_infos(
         self,
         *,
-        handler: Optional['HardwareHandlerBase'],
-        plugin: 'HW_PluginBase',
-        devices: Sequence['Device'] = None,
+        handler: Optional["HardwareHandlerBase"],
+        plugin: "HW_PluginBase",
+        devices: Sequence["Device"] = None,
         include_failing_clients: bool = False,
-    ) -> List['DeviceInfo']:
+    ) -> List["DeviceInfo"]:
         """Returns a list of DeviceInfo objects: one for each connected device accepted by the plugin.
         Already paired devices are also included, as it is okay to reuse them.
         """
@@ -1267,40 +1408,58 @@ class DeviceMgr(ThreadJob):
                 soft_device_id = client.get_soft_device_id()
                 model_name = client.device_model_name()
             except Exception as e:
-                self.logger.error(f'failed to create client for {plugin.name} at {device.path}: {repr(e)}')
+                self.logger.error(
+                    f"failed to create client for {plugin.name} at {device.path}: {repr(e)}"
+                )
                 if include_failing_clients:
-                    infos.append(DeviceInfo(device=device, exception=e, plugin_name=plugin.name))
+                    infos.append(
+                        DeviceInfo(device=device, exception=e, plugin_name=plugin.name)
+                    )
                 continue
-            infos.append(DeviceInfo(device=device,
-                                    label=label,
-                                    initialized=is_initialized,
-                                    plugin_name=plugin.name,
-                                    soft_device_id=soft_device_id,
-                                    model_name=model_name))
+            infos.append(
+                DeviceInfo(
+                    device=device,
+                    label=label,
+                    initialized=is_initialized,
+                    plugin_name=plugin.name,
+                    soft_device_id=soft_device_id,
+                    model_name=model_name,
+                )
+            )
 
         return infos
 
-    def select_device(self, plugin: 'HW_PluginBase', handler: 'HardwareHandlerBase',
-                      keystore: 'Hardware_KeyStore', devices: Sequence['Device'] = None,
-                      *, allow_user_interaction: bool = True) -> 'DeviceInfo':
+    def select_device(
+        self,
+        plugin: "HW_PluginBase",
+        handler: "HardwareHandlerBase",
+        keystore: "Hardware_KeyStore",
+        devices: Sequence["Device"] = None,
+        *,
+        allow_user_interaction: bool = True,
+    ) -> "DeviceInfo":
         """Select the device to use for keystore."""
         # ideally this should not be called from the GUI thread...
         # assert handler.get_gui_thread() != threading.current_thread(), 'must not be called from GUI thread'
         while True:
-            infos = self.list_pairable_device_infos(handler=handler, plugin=plugin, devices=devices)
+            infos = self.list_pairable_device_infos(
+                handler=handler, plugin=plugin, devices=devices
+            )
             if infos:
                 break
             if not allow_user_interaction:
                 raise CannotAutoSelectDevice()
-            msg = _('Please insert your {}').format(plugin.device)
+            msg = _("Please insert your {}").format(plugin.device)
             msg += " ("
             if keystore.label and keystore.label not in PLACEHOLDER_HW_CLIENT_LABELS:
                 msg += f"label: {keystore.label}, "
             msg += f"bip32 root fingerprint: {keystore.get_root_fingerprint()!r}"
-            msg += ').\n\n{}\n\n{}'.format(
-                _('Verify the cable is connected and that '
-                  'no other application is using it.'),
-                _('Try to connect again?')
+            msg += ").\n\n{}\n\n{}".format(
+                _(
+                    "Verify the cable is connected and that "
+                    "no other application is using it."
+                ),
+                _("Try to connect again?"),
             )
             if not handler.yes_no_question(msg):
                 raise UserCancelled()
@@ -1311,49 +1470,69 @@ class DeviceMgr(ThreadJob):
         if keystore.soft_device_id:
             for info in infos:
                 if info.soft_device_id == keystore.soft_device_id:
-                    self.logger.debug(f"select_device. auto-selected(1) {plugin.device}: soft_device_id matched")
+                    self.logger.debug(
+                        f"select_device. auto-selected(1) {plugin.device}: soft_device_id matched"
+                    )
                     return info
         # method 2: select device by label
         #           but only if not a placeholder label and only if there is no collision
         device_labels = [info.label for info in infos]
-        if (keystore.label not in PLACEHOLDER_HW_CLIENT_LABELS
-                and device_labels.count(keystore.label) == 1):
+        if (
+            keystore.label not in PLACEHOLDER_HW_CLIENT_LABELS
+            and device_labels.count(keystore.label) == 1
+        ):
             for info in infos:
                 if info.label == keystore.label:
-                    self.logger.debug(f"select_device. auto-selected(2) {plugin.device}: label recognised")
+                    self.logger.debug(
+                        f"select_device. auto-selected(2) {plugin.device}: label recognised"
+                    )
                     return info
         # method 3: if there is only one device connected, and we don't have useful label/soft_device_id
         #           saved for keystore anyway, select it
-        if (len(infos) == 1
-                and keystore.label in PLACEHOLDER_HW_CLIENT_LABELS
-                and keystore.soft_device_id is None):
-            self.logger.debug(f"select_device. auto-selected(3) {plugin.device}: only one device")
+        if (
+            len(infos) == 1
+            and keystore.label in PLACEHOLDER_HW_CLIENT_LABELS
+            and keystore.soft_device_id is None
+        ):
+            self.logger.debug(
+                f"select_device. auto-selected(3) {plugin.device}: only one device"
+            )
             return infos[0]
 
-        self.logger.debug(f"select_device. auto-select failed for {plugin.device}. {allow_user_interaction=}")
+        self.logger.debug(
+            f"select_device. auto-select failed for {plugin.device}. {allow_user_interaction=}"
+        )
         if not allow_user_interaction:
             raise CannotAutoSelectDevice()
         # ask user to select device manually
         msg = (
-                _("Could not automatically pair with device for given keystore.") + "\n"
-                + f"(keystore label: {keystore.label!r}, "
-                + f"bip32 root fingerprint: {keystore.get_root_fingerprint()!r})\n\n")
+            _("Could not automatically pair with device for given keystore.")
+            + "\n"
+            + f"(keystore label: {keystore.label!r}, "
+            + f"bip32 root fingerprint: {keystore.get_root_fingerprint()!r})\n\n"
+        )
         msg += _("Please select which {} device to use:").format(plugin.device)
         msg += "\n(" + _("Or click cancel to skip this keystore instead.") + ")"
-        choices = [ChoiceItem(key=idx, label=info.label_for_device_select())
-                   for (idx, info) in enumerate(infos)]
-        self.logger.debug(f"select_device. prompting user for manual selection of {plugin.device}. "
-                          f"num options: {len(infos)}. options: {infos}")
+        choices = [
+            ChoiceItem(key=idx, label=info.label_for_device_select())
+            for (idx, info) in enumerate(infos)
+        ]
+        self.logger.debug(
+            f"select_device. prompting user for manual selection of {plugin.device}. "
+            f"num options: {len(infos)}. options: {infos}"
+        )
         c = handler.query_choice(msg, choices)
         if c is None:
             raise UserCancelled()
         info = infos[c]
-        self.logger.debug(f"select_device. user manually selected {plugin.device}. device info: {info}")
+        self.logger.debug(
+            f"select_device. user manually selected {plugin.device}. device info: {info}"
+        )
         # note: updated label/soft_device_id will be saved after pairing succeeds
         return info
 
     @runs_in_hwd_thread
-    def _scan_devices_with_hid(self) -> List['Device']:
+    def _scan_devices_with_hid(self) -> List["Device"]:
         try:
             import hid  # noqa: F811
         except ImportError:
@@ -1361,22 +1540,24 @@ class DeviceMgr(ThreadJob):
 
         devices = []
         for d in hid.enumerate(0, 0):
-            vendor_id = d['vendor_id']
-            product_key = (vendor_id, d['product_id'])
+            vendor_id = d["vendor_id"]
+            product_key = (vendor_id, d["product_id"])
             plugin = None
             if product_key in self._recognised_hardware:
                 plugin = self._recognised_hardware[product_key]
             elif vendor_id in self._recognised_vendor:
                 plugin = self._recognised_vendor[vendor_id]
             if plugin:
-                device = plugin.create_device_from_hid_enumeration(d, product_key=product_key)
+                device = plugin.create_device_from_hid_enumeration(
+                    d, product_key=product_key
+                )
                 if device:
                     devices.append(device)
         return devices
 
     @runs_in_hwd_thread
     @profiler
-    def scan_devices(self) -> Sequence['Device']:
+    def scan_devices(self) -> Sequence["Device"]:
         self.logger.info("scanning devices...")
 
         # First see what's connected that we know about
@@ -1389,7 +1570,9 @@ class DeviceMgr(ThreadJob):
             try:
                 new_devices = f()
             except BaseException as e:
-                self.logger.error(f'custom device enum failed. func {str(f)}, error {e!r}')
+                self.logger.error(
+                    f"custom device enum failed. func {str(f)}, error {e!r}"
+                )
             else:
                 devices.extend(new_devices)
 
@@ -1430,9 +1613,13 @@ class DeviceMgr(ThreadJob):
         # add hidapi
         try:
             import hid  # noqa: F811
-            ret["hidapi.version"] = hid.__version__  # available starting with 0.12.0.post2
+
+            ret["hidapi.version"] = (
+                hid.__version__
+            )  # available starting with 0.12.0.post2
         except Exception as e:
             from importlib.metadata import version
+
             try:
                 ret["hidapi.version"] = version("hidapi")
             except ImportError:
@@ -1440,11 +1627,11 @@ class DeviceMgr(ThreadJob):
         return ret
 
     def trigger_pairings(
-            self,
-            keystores: Sequence['KeyStore'],
-            *,
-            allow_user_interaction: bool = True,
-            devices: Sequence['Device'] = None,
+        self,
+        keystores: Sequence["KeyStore"],
+        *,
+        allow_user_interaction: bool = True,
+        devices: Sequence["Device"] = None,
     ) -> None:
         """Given a list of keystores, try to pair each with a connected hardware device.
 
@@ -1462,6 +1649,7 @@ class DeviceMgr(ThreadJob):
            and then tell the user ks1 could not be paired (and there are no devices left to try)
         """
         from .keystore import Hardware_KeyStore
+
         keystores = [ks for ks in keystores if isinstance(ks, Hardware_KeyStore)]
         if not keystores:
             return

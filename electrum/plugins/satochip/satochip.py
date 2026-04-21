@@ -175,13 +175,17 @@ class SatochipClient(HardwareClientBase):
 
     _CARD_LABEL_SENTINELS = frozenset({"(none)", "(unknown)"})
 
+    @staticmethod
+    def _is_blocked_status(status) -> bool:
+        return bool(status) and status.get("PIN0_remaining_tries") == 0
+
     def label(self):
         try:
             if not self._ensure_card_connection():
                 return "Satochip"
             status = None
             try:
-                self.cc.card_get_status()
+                (_, _, _, status) = self.cc.card_get_status()
             except CardNotPresentError:
                 return "Satochip (no card inserted)"
             except PinBlockedError:
@@ -214,6 +218,9 @@ class SatochipClient(HardwareClientBase):
 
             if base_label is None:
                 base_label = "Satochip"
+
+            if self._is_blocked_status(status):
+                return f"{base_label} [blocked]"
 
             return base_label
         except Exception:
@@ -254,7 +261,11 @@ class SatochipClient(HardwareClientBase):
             except PinBlockedError:
                 raise UserFacingException(
                     _(
-                        "Your Satochip PIN is blocked. The card must be factory-reset before it can be used again."
+                        "Your Satochip PIN is blocked due to too many failed attempts.\n\n"
+                        "The only way to recover is a factory reset, which will erase "
+                        "all data from the card.\n\n"
+                        "If you are setting up a wallet, the wizard will guide you through "
+                        "the reset. Otherwise, open Settings → Advanced → Factory Reset."
                     )
                 )
             except CardSetupNotDoneError:
@@ -329,15 +340,48 @@ class SatochipClient(HardwareClientBase):
 
     @runs_in_hwd_thread
     def perform_factory_reset(self):
-        """Factory reset: unblock PIN with random PUK to trigger card reset."""
-        ublk_0 = list(b"\x00" * 16)
-        pin_0 = list(b"\x00" * 6)
-        response, sw1, sw2 = self.cc.card_unblock_PIN(0, ublk_0, pin_0)
-        if sw1 == 0x69 and sw2 == 0x85:
-            pass  # PIN not blocked yet — proceed with card_reset_seed
-        elif sw1 != 0x90:
-            pass  # unblock failed, try reset anyway
-        self.cc.card_reset_seed(list(b"Muscle00"), [])
+        self.cc.mode_factory_reset = True
+        try:
+            response, sw1, sw2 = self.cc.card_reset_factory_signal()
+
+            if sw1 == 0xFF and sw2 == 0x00:
+                self.cc.card_disconnect()
+                return
+            elif sw1 == 0x9C and sw2 == 0x04:
+                self.cc.card_disconnect()
+                raise UserFacingException(
+                    _("Card is already in factory state (not initialized).")
+                )
+            elif sw1 == 0xFF and sw2 == 0xFF:
+                self.cc.card_disconnect()
+                raise UserFacingException(
+                    _(
+                        "Card was not removed since last attempt. "
+                        "Remove and reinsert the card, then try again."
+                    )
+                )
+            elif sw1 == 0xFF and sw2 > 0x00:
+                self.cc.card_disconnect()
+                raise UserFacingException(
+                    _(
+                        "Factory reset in progress (remaining steps: {}). "
+                        "Remove and reinsert the card, then click Factory Reset again."
+                    ).format(sw2)
+                )
+            else:
+                self.cc.card_disconnect()
+                raise UserFacingException(
+                    _("Factory reset failed with error: {}").format(
+                        hex(256 * sw1 + sw2)
+                    )
+                )
+        except UserFacingException:
+            raise
+        except Exception:
+            self.cc.card_disconnect()
+            raise
+        finally:
+            self.cc.mode_factory_reset = False
 
     # -- handler communication -----------------------------------------------
 
@@ -864,8 +908,8 @@ class SatochipPlugin(HW_PluginBase):
     def wizard_entry_for_device(
         self, device_info: "DeviceInfo", *, new_wallet: bool
     ) -> str:
-        label_str = (device_info.label or "").lower()
-        if "blocked" in label_str:
+        label_str = device_info.label or ""
+        if label_str.endswith(" [blocked]"):
             return "satochip_blocked"
 
         device_state = device_info.initialized

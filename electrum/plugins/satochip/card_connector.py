@@ -637,6 +637,19 @@ class CardConnector:
 
         return authentikey
 
+    def card_reset_factory_signal(self):
+        """Send factory reset APDU. Returns (response, sw1, sw2).
+
+        Response codes:
+        - 0xFF 0x00: Factory reset complete
+        - 0xFF NN (NN>0): Remaining counter, must remove/reinsert card
+        - 0xFF 0xFF: Card not removed between attempts
+        - 0x9C 0x04: Setup not done (already factory state)
+        """
+        apdu = [0xB0, 0xFF, 0x00, 0x00, 0x00]
+        response, sw1, sw2 = self.card_transmit(apdu)
+        return response, sw1, sw2
+
     def card_export_authentikey(self):
         """Export the device authentikey.
 
@@ -1086,6 +1099,8 @@ class CardConnector:
         elif sw1 == 0xFF and sw2 == 0x00:
             self.set_pin(pin_nbr, None)
             self.setup_done = False
+            self.sc = None
+            self.needs_secure_channel = None
             raise CardResetToFactoryError("CARD RESET TO FACTORY!")
 
         return response, sw1, sw2

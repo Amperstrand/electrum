@@ -389,7 +389,9 @@ class SatochipSettingsDialog(WindowModalDialog):
             _(
                 "WARNING: Factory reset erases ALL data from the card including "
                 "the seed and PIN. Make sure you have a backup of your seed before "
-                "proceeding!"
+                "proceeding! The reset may require removing and reinserting the card "
+                "several times, clicking Factory Reset again after each reinsertion, "
+                "until the process completes."
             )
         )
         reset_warning.setWordWrap(True)
@@ -404,9 +406,6 @@ class SatochipSettingsDialog(WindowModalDialog):
         seed_btn = QPushButton(_("Reset Seed"))
         seed_btn.clicked.connect(
             lambda: thread.add(connect_and_doit, on_success=self.reset_seed)
-        )
-        seed_btn.clicked.connect(
-            lambda: thread.add(connect_and_doit, on_success=self.show_values)
         )
         seed_vbox.addWidget(seed_btn)
 
@@ -442,8 +441,6 @@ class SatochipSettingsDialog(WindowModalDialog):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event):
-        self.thread.stop()
-        self.thread.wait(2000)
         super().closeEvent(event)
 
     def _pin_entry_dialog(self, msg):
@@ -480,15 +477,6 @@ class SatochipSettingsDialog(WindowModalDialog):
     def show_values(self, client):
         """Refresh the Information tab with card data."""
         try:
-            is_ok = client.verify_PIN()
-            if not is_ok:
-                self.window.show_error(_("Action cancelled by user"))
-                return
-        except Exception as e:
-            self.window.show_error(str(e))
-            return
-
-        try:
             (response, sw1, sw2, d) = client.cc.card_get_status()
         except Exception as e:
             self.window.show_error(str(e))
@@ -506,13 +494,15 @@ class SatochipSettingsDialog(WindowModalDialog):
 
             # Device ID (from authentikey fingerprint)
             try:
-                authentikey = client.cc.card_export_authentikey()
-                if authentikey:
-                    from electrum.crypto import hash_160
-
-                    pubkey = authentikey.get_public_key_bytes(compressed=True)
-                    device_id_str = hash_160(pubkey)[:4].hex()
-                    self.device_id_label.setText("<tt>%s" % device_id_str.upper())
+                device_id_str = getattr(client.cc, "UID_SHA1", None)
+                if device_id_str:
+                    self.device_id_label.setText("<tt>%s" % device_id_str[:8].upper())
+                else:
+                    device_id_str = client.get_authentikey_fingerprint()
+                    if device_id_str:
+                        self.device_id_label.setText("<tt>%s" % device_id_str.upper())
+                    else:
+                        self.device_id_label.setText("<tt>(unavailable)")
             except Exception:
                 self.device_id_label.setText("<tt>(unavailable)")
 
@@ -638,7 +628,11 @@ class SatochipSettingsDialog(WindowModalDialog):
             client.perform_factory_reset()
             self.window.show_message(_("Factory reset completed successfully."))
         except Exception as ex:
-            self.window.show_error(_("Factory reset failed: {}").format(str(ex)))
+            msg = str(ex)
+            if "Factory reset in progress" in msg or "already in factory state" in msg:
+                self.window.show_message(msg)
+            else:
+                self.window.show_error(_("Factory reset failed: {}").format(msg))
 
     def reset_seed(self, client):
         _logger.info("In reset_seed")
@@ -701,6 +695,10 @@ class WCSatochipBlocked(WalletWizardComponent):
     def _on_status_updated(self, text):
         self.status_label.setText(text)
 
+    def _set_reset_progress(self, text):
+        self.reset_btn.setText(_("Continue Factory Reset"))
+        self.statusUpdated.emit(text)
+
     def on_ready(self):
         _name, _info = self.wizard_data["hardware_device"]
         self.plugin = self.wizard.plugins.get_plugin(_info.plugin_name)
@@ -720,7 +718,7 @@ class WCSatochipBlocked(WalletWizardComponent):
                     _("Ensure you have a seed backup before proceeding!\n\n"),
                     _(
                         "Click below to start the reset. Remove and reinsert the card "
-                        "when prompted \u2014 detection is automatic."
+                        "when prompted, then click Continue Factory Reset again."
                     ),
                 ]
             )
@@ -758,6 +756,7 @@ class WCSatochipBlocked(WalletWizardComponent):
             try:
                 client.perform_factory_reset()
                 self._reset_done = True
+                self.reset_btn.setText(_("Factory Reset Complete"))
                 self.statusUpdated.emit(
                     _(
                         "Factory reset complete! Click Next to rescan devices, "
@@ -766,8 +765,21 @@ class WCSatochipBlocked(WalletWizardComponent):
                 )
                 self.valid = True
             except Exception as e:
-                self.statusUpdated.emit(_("Reset failed: {}").format(str(e)))
-                _logger.exception("Factory reset failed")
+                msg = str(e)
+                if "Factory reset in progress" in msg:
+                    self._set_reset_progress(msg)
+                elif "already in factory state" in msg:
+                    self.reset_btn.setText(_("Factory Reset Complete"))
+                    self.statusUpdated.emit(
+                        _(
+                            "The card is already in factory state. Click Next to "
+                            "rescan devices and set it up again."
+                        )
+                    )
+                    self.valid = True
+                else:
+                    self.statusUpdated.emit(_("Reset failed: {}").format(msg))
+                    _logger.exception("Factory reset failed")
             finally:
                 self._busy = False
                 self.reset_btn.setEnabled(True)
