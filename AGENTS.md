@@ -8,8 +8,7 @@ Electrum-Satochip: A plugin for the Electrum Bitcoin wallet that adds support fo
 
 ### Current State
 
-- **Branch `satochip-minimal`**: Inlined protocol layer (2,014 lines) using Electrum-native crypto (`electrum_ecc`, `electrum.crypto`). Only external dep: `pyscard`. 56 unit tests passing.
-- **Branch `satochip-pr`**: 9 commits with inlined protocol, Qt UI, wizard integration, visual lifecycle tests.
+- **Branch `satochip-pr`** (active): Inlined protocol layer using Electrum-native crypto (`electrum_ecc`, `electrum.crypto`). Only external dep: `pyscard`. 57 unit tests passing, 2/2 E2E visual tests passing.
 - **Toporin's PR #9972** (active, June 2025): Uses `pysatochip==0.12.3` as external dep. 3 files. Adds 5 transitive deps (`ecdsa`, `pyaes`, `cryptography`, `pyopenssl`, `certifi`).
 
 ### Research Findings
@@ -33,7 +32,7 @@ Electrum-Satochip: A plugin for the Electrum Bitcoin wallet that adds support fo
 - `cryptography`/`pyopenssl` — Used in `certificate_validator.py` only for X.509 chain verification. Replaceable with effort using `cryptography.x509` directly (already a transitive dep of Electrum).
 - `certifi` — Used in `Satochip2FA.py` only (1 line). Trivially replaceable.
 
-**5 bugs in pysatochip 0.12.3 fixed in our inlined code:**
+**5 bugs in pysatochip (unfixed as of 0.17.0, June 2025):**
 1. `card_transmit` infinite loop: `while(card_present)` with no retry limit
 2. `card_transmit` 0x9C21 recursion guard
 3. `UID`/`UID_SHA1` not initialized in `__init__`
@@ -42,14 +41,92 @@ Electrum-Satochip: A plugin for the Electrum Bitcoin wallet that adds support fo
 
 ### Strategy Decision
 
-**Recommended: Submit our inlined approach, offer collaboration to Toporin.**
+**Chosen: Inlined protocol approach.**
 
-Rationale:
-1. Jade precedent: Jade inlined `jadepy/` (1,899 lines) to strip unwanted deps. Our protocol layer (2,014 lines) does the same.
-2. Zero new transitive deps: Only `pyscard` needed. Toporin's approach adds 5 packages.
-3. No duplicate ECC: `ecdsa` (pure Python) and `electrum_ecc` (libsecp256k1) doing the same math. pysatochip's `ecc.py` is literally a copy of Electrum's own module.
-4. Bug fixes included: 5 critical bugs fixed that would need upstream pysatochip releases otherwise.
-5. 65% smaller: 2,014 lines vs pysatochip's 5,478.
+### Plugin Size Comparison
+
+| Plugin | Protocol layer | Plugin glue | Total |
+|--------|---------------|-------------|-------|
+| **Satochip** | **2,103** | **3,202** | **5,305** |
+| Jade | 2,384 | 512 | 2,896 |
+| Trezor | 0 (external `trezorlib`) | 1,867 | 1,867 |
+| Ledger | 0 (external `btchip`) | 1,484 | 1,484 |
+| ColdCard | 0 (external `pycoin`) | 1,007 | 1,007 |
+| Digital Bitbox | 0 | 896 | 896 |
+| BitBox02 | 0 (external `noiseprotocol`) | 875 | 875 |
+
+Satochip is the largest plugin (1.8x Jade). The size comes from the problem domain:
+- **Smartcard APDU protocol** (card_connector.py: 1,321 lines) — inherently verbose APDU construction, retry logic, secure channel, PIN management
+- **Card lifecycle** — factory reset → init → PIN → seed → PUK recovery (more states than USB wallets)
+- **Settings dialog** (qt.py: 1,991 lines) — 3 tabs with interactive controls, card swap dialog, PIN/PUK dialogs
+- **Wizard components** (~800 lines across 11 classes) — Satochip-specific setup, import, recovery flows
+
+The protocol layer (2,103 lines) is comparable to Jade's `jadepy/` (2,384 lines). Both are inlined stripped libraries with minimal external deps.
+
+### Why Inlined Protocol (Not pysatochip)
+
+**Rationale:**
+
+1. **Jade precedent**: Blockstream Jade inlined `jadepy/` (2,384 lines) to strip BLE/HTTP deps. Accepted by Electrum maintainers. Our protocol layer (2,103 lines) does the same thing — strips 2FA/SeedKeeper/Satodime/PKI deps.
+
+2. **Zero new transitive deps**: Only `pyscard` needed. pysatochip adds 5 packages (`ecdsa`, `pyaes`, `cryptography`, `pyopenssl`, `certifi`). Electrum spent significant effort replacing `ecdsa` with `electrum_ecc` (libsecp256k1 C bindings, 10-100x faster). Adding `ecdsa` back is a regression.
+
+3. **No duplicate ECC**: pysatochip's `ecc.py` is literally a copy of Electrum's own module — it imports from `ecdsa` exactly the way Electrum used to before switching to `electrum_ecc`. Using pysatochip would mean both `ecdsa` (pure Python, slow) and `electrum_ecc` (libsecp256k1, fast) doing the same secp256k1 math.
+
+4. **5 unfixed bugs**: pysatochip 0.17.0 (June 2025) still has all 5 bugs. The infinite loop in `card_transmit` and the uninitialized `UID`/`UID_SHA1` are production issues. No upstream release has fixed them.
+
+5. **No precedent for crypto swapping**: No Electrum plugin replaces an external library's crypto with Electrum's own. ColdCard subclasses one method (`mitm_verify`) — that's the closest precedent, but it's minimal compared to rewriting all of pysatochip's ECC/AES calls.
+
+6. **65% smaller**: 2,103 lines vs pysatochip's ~3,600+ (Satochip-relevant subset only; full package is 5,478 lines including SeedKeeper/Satodime).
+
+### Crypto Advantage of Inlined Approach
+
+The inlined code uses Electrum-native crypto throughout:
+- **ECDH key exchange** (`secure_channel.py`): Uses `electrum_ecc.ECPubkey` and `electrum_ecc.ECPrivkey` for all elliptic curve operations. Same library Electrum uses for wallet operations.
+- **AES-CBC encryption** (`secure_channel.py`): Uses `electrum.crypto.aes_encrypt_with_iv` / `aes_decrypt_with_iv`. Same AES implementation Electrum uses for wallet file encryption.
+- **HMAC-SHA-256** (`secure_channel.py`): Uses Python stdlib `hmac` + `hashlib.sha256`. Standard, well-audited.
+- **Signature recovery** (`card_data_parser.py`): Uses `electrum_ecc.ECPubkey.from_signature` and `electrum_ecc.ECPrivkey`. Same code path as Electrum's transaction signing.
+- **SHA-1** for UID derivation: Uses stdlib `hashlib.sha1`. Only used for device identification display, not security.
+
+If we used pysatochip, all of these would go through pysatochip's own crypto stack (`ecdsa` + `pyaes`), duplicating what Electrum already provides and running on slower pure-Python implementations.
+
+### Plugin Discovery
+
+Electrum discovers plugins via `manifest.json` (read at `electrum/plugin.py:120`). All 6 existing HW plugins have empty `__init__.py` files. Our `manifest.json` has the correct `registers_keystore` and `available_for` fields. The `__init__.py` is intentionally empty.
+
+### Plugin Dependency Patterns (All 6 Upstream HW Plugins)
+
+| Plugin | External Dep | Dep Has Own Crypto? | Pattern |
+|--------|-------------|-------------------|---------|
+| Jade | `cbor2` (in jadepy/) | No | Inlined stripped library |
+| Trezor | `trezorlib` | Yes (`ecdsa`) | Full external dep |
+| ColdCard | `ckcc-protocol` | Yes (`pycoin`) | External dep, one method subclassed |
+| Ledger | `ledger_bitcoin` | Yes (`ecdsa`) | Full external dep |
+| BitBox02 | `bitbox02` | Yes (`noiseprotocol`) | Full external dep |
+| Digital Bitbox | None | N/A | Pure Electrum crypto |
+| **Satochip (ours)** | `pyscard` | No | Inlined stripped library |
+
+Satochip follows the Jade/Digital Bitbox pattern: inlined protocol code using Electrum-native crypto. No external crypto dependencies.
+
+### Refactoring Assessment
+
+The codebase has been audited for refactoring opportunities. Current assessment:
+
+**Already done:**
+- Dead code removed (BIP85, NDEF, extended privkey, unused variables)
+- Section separators removed from all files
+- Raw SW12 status codes replaced with named constants
+- Thread safety fixes (QTimer.singleShot helpers)
+- Import cleanup (PyQt5 removal, fallback removals)
+- Style alignment (naming conventions, single quotes)
+
+**Evaluated but not worth doing:**
+- Extract PIN entry widget from `SatochipSetupLayout`: Only duplicated 2x with different validation. Abstraction cost exceeds savings.
+- Consolidate `threading.Thread` patterns across 6 wizard components: Would save ~60 lines but add debugging complexity. Trezor plugin doesn't do this either.
+- `card_connector.py` APDU methods: 40 methods, only 4 trivial. The APDU protocol is inherently verbose — no meaningful simplification possible.
+- Type hints on public methods: Jade doesn't have them either. Not enforced by upstream.
+
+**The plugin is PR-ready.** Remaining items from audit are low-severity (missing type hints, broad exception catches inherent to smartcard I/O, test coverage for pure functions).
 
 ### Future: SeedKeeper and Tapsigner Support
 
@@ -76,7 +153,6 @@ repository or person on behalf of the user.** This includes:
 
 ## Development Conventions
 
-- Branch `satochip-minimal` has all development; `satochip-pr` has squashed commits for PR
 - Test files ARE git-tracked
 - No Java-style parens, no unused imports, no excessive logging/comments
 - 2FA and SeedKeeper are OUT OF SCOPE for initial PR
@@ -133,7 +209,7 @@ These imports changed in the current Electrum codebase and required fixes:
 4. **`var_int()` returns `str`, not `bytes`**: `electrum.bitcoin.var_int(64)` returns `'40'` (hex string). Our `_usermessage_magic` handles this with `bytes.fromhex(length)` conversion.
 5. **`electrum/hw_wallet/`**: Moved from `electrum/plugins/hw_wallet/` to `electrum/hw_wallet/` in commit `6e087950c`. If the directory is empty, restore with `git checkout 6e087950c -- electrum/hw_wallet/`.
 6. **`HW_PluginBase` identity**: `electrum.hw_wallet.plugin.HW_PluginBase` and `electrum.plugins.hw_wallet.plugin.HW_PluginBase` are **different classes**. `base_wizard.py` imports from `electrum.plugins.hw_wallet`. All Satochip imports must use relative imports (`from ..hw_wallet`) to match. Using absolute `from electrum.hw_wallet` causes `isinstance` assertion failures in the wizard.
-7. **`__init__.py` registration**: Plugin `__init__.py` must export `registers_keystore = ('hardware', 'satochip', ...)` and `available_for = ['qt', 'cmdline']`. Without these, Electrum never discovers Satochip as a hardware wallet plugin.
+7. **`__init__.py` registration**: Electrum reads `manifest.json` at `plugin.py:120` for plugin discovery, not `__init__.py`. All 6 existing HW plugins have empty `__init__.py` files. Our `manifest.json` has the correct `registers_keystore` and `available_for` fields.
 8. **`ChoiceWidget`**: Imported directly from `electrum.gui.qt.util`. No fallback needed (present in upstream).
 9. **`WalletWizardComponent`**: Imported directly from `electrum.gui.qt.wizard.wallet`. No fallback needed (present in upstream).
 
