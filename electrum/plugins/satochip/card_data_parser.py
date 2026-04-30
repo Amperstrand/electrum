@@ -185,7 +185,6 @@ class CardDataParser:
         )
         return self.pubkey
 
-    ##############
     def parse_message_signature(self, response, hash, pubkey):
         logger.debug("In parse_message_signature")
 
@@ -213,7 +212,6 @@ class CardDataParser:
 
         return compsig
 
-    ##############
     def get_pubkey_from_signature(self, coordx, data, sig):
         logger.debug("In get_pubkey_from_signature")
         data = bytearray(data)
@@ -250,7 +248,6 @@ class CardDataParser:
         logger.debug("Signature verified!")
         return pubkey
 
-    ##############
     def parse_parse_transaction(self, response):
         """Satochip returns: [(hash_size+2)(2b) | tx_hash(32b)
         | need2fa(2b) | sig_size(2b) | sig(sig_size)

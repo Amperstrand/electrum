@@ -17,7 +17,7 @@ except ImportError:
         convert_bip32_path_to_list_of_uint32
         as convert_bip32_strpath_to_intpath,
     )
-from .jc_constants import JCconstants
+from .jc_constants import JCconstants, SW
 from .card_data_parser import CardDataParser, _msg_warning
 from .tx_parser import TxParser
 from .secure_channel import SecureChannel
@@ -157,7 +157,7 @@ class RemovalObserver(CardObserver):
             # select applet
             try:
                 (response, sw1, sw2) = self.cc.card_select()
-                if sw1 != 0x90 or sw2 != 0x00:
+                if (sw1, sw2) != SW.SW_OK:
                     self.cc.card_disconnect()
                     break
 
@@ -165,7 +165,7 @@ class RemovalObserver(CardObserver):
                 if not self.cc.mode_factory_reset:
                     (response, sw1, sw2, status) = self.cc.card_get_status()
                     if (
-                        (sw1 != 0x90 or sw2 != 0x00)
+                        ((sw1, sw2) != SW.SW_OK)
                         and (sw1 != 0x9C or sw2 != 0x04)
                     ):
                         self.cc.card_disconnect()
@@ -291,10 +291,6 @@ class CardConnector:
         protocol = self._protocol or CardConnection.T1_protocol
         return svc.connection.transmit(apdu, protocol)
 
-    ###########################################
-    #             Applet management           #
-    ###########################################
-
     def card_transmit(self, plain_apdu):
         logger.debug("In card_transmit")
         retries = 0
@@ -323,7 +319,7 @@ class CardConnector:
             if sw1 == 0x9C and sw2 == 0x06:
                 retries += 1
                 (response, sw1, sw2) = self.card_verify_PIN_simple()
-            elif sw1 == 0x9C and sw2 == 0x21:
+            elif (sw1, sw2) == SW.SW_SECURE_CHANNEL_REQUIRED:
                 retries += 1
                 logger.error(
                     "In card_transmit secure channel "
@@ -333,7 +329,7 @@ class CardConnector:
                 self.card_initiate_secure_channel()
                 self.needs_secure_channel = True
             # decrypt response
-            elif sw1 == 0x90 and sw2 == 0x00:
+            elif (sw1, sw2) == SW.SW_OK:
                 if self.needs_secure_channel and ins not in [
                     0xA4,
                     0x81,
@@ -435,7 +431,7 @@ class CardConnector:
             + CardConnector.SATOCHIP_AID
         )
         response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 != 0x90 or sw2 != 0x00:
+        if (sw1, sw2) != SW.SW_OK:
             raise CardSelectError(_("Card select error"), ins=0xA4)
         self.card_type = "Satochip"
         logger.debug("Found a Satochip!")
@@ -450,7 +446,7 @@ class CardConnector:
         apdu = [cla, ins, p1, p2]
         response, sw1, sw2 = self.card_transmit(apdu)
         d = {}
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             # card applet version
             d["protocol_major_version"] = response[0]
             d["protocol_minor_version"] = response[1]
@@ -503,7 +499,7 @@ class CardConnector:
             else:
                 d["feature_musig2_policy"] = None
 
-        elif sw1 == 0x9C and sw2 == 0x04:
+        elif (sw1, sw2) == SW.SW_SETUP_NOT_DONE:
             self.setup_done = d["setup_done"] = False
             self.is_seeded = d["is_seeded"] = False
             self.needs_secure_channel = d["needs_secure_channel"] = False
@@ -516,10 +512,6 @@ class CardConnector:
 
         return response, sw1, sw2, d
 
-    ###########################################
-    #         Generic applet methods          #
-    ###########################################
-
     def card_get_label(self):
         logger.debug("In card_get_label")
         cla = JCconstants.CardEdge_CLA
@@ -529,7 +521,7 @@ class CardConnector:
         apdu = [cla, ins, p1, p2]
         response, sw1, sw2 = self.card_transmit(apdu)
 
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             try:
                 label = bytes(response[1:]).decode("utf8")
             except UnicodeDecodeError:
@@ -655,15 +647,11 @@ class CardConnector:
 
         # send apdu (contains sensitive data!)
         response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             self.set_pin(0, pin0)  # cache PIN value
             self.setup_done = True
 
         return response, sw1, sw2
-
-    ###########################################
-    #              BIP32 commands             #
-    ###########################################
 
     def card_bip32_import_seed(self, seed):
         """Import a seed into the device
@@ -688,7 +676,7 @@ class CardConnector:
         response, sw1, sw2 = self.card_transmit(apdu)
 
         authentikey = None
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             authentikey = self.card_bip32_set_authentikey_pubkey(response)
             authentikey_hex = (
                 authentikey.get_public_key_bytes(compressed=True).hex()
@@ -698,13 +686,13 @@ class CardConnector:
             )
             self.is_seeded = True
 
-        elif sw1 == 0x9C and sw2 == 0x17:
+        elif (sw1, sw2) == SW.SW_ALREADY_SEEDED:
             logger.error(
                 "Error during secret import: "
                 "card is already seeded (0x9C17)"
             )
             raise CardError(_("This card already has a seed imported."))
-        elif sw1 == 0x9C and sw2 == 0x0F:
+        elif (sw1, sw2) == SW.SW_INVALID_PARAMETER:
             logger.error(
                 "Error during secret import: "
                 "invalid parameter (0x9C0F)"
@@ -745,10 +733,10 @@ class CardConnector:
         apdu = [cla, ins, p1, p2]
 
         response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             authentikey = self.parser.parse_bip32_get_authentikey(response)
             return authentikey
-        elif sw1 == 0x9C and sw2 == 0x04:
+        elif (sw1, sw2) == SW.SW_SETUP_NOT_DONE:
             logger.info(
                 "card_bip32_get_authentikey(): "
                 "Satochip is not initialized => Raising error!"
@@ -776,16 +764,16 @@ class CardConnector:
         apdu = [cla, ins, p1, p2]
 
         response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x9C and sw2 == 0x14:
+        if (sw1, sw2) == SW.SW_SEED_NOT_SET:
             raise UninitializedSeedError(
                 _MSG_SEED_NOT_INITIALIZED + _msg_warning()
             )
-        if sw1 == 0x9C and sw2 == 0x04:
+        if (sw1, sw2) == SW.SW_SETUP_NOT_DONE:
             raise UninitializedSeedError(
                 _MSG_NOT_INITIALIZED + _msg_warning()
             )
         authentikey = None
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             authentikey = self.card_bip32_set_authentikey_pubkey(response)
             self.is_seeded = True
         return authentikey
@@ -836,16 +824,16 @@ class CardConnector:
         while True:
             response, sw1, sw2 = self.card_transmit(apdu)
 
-            if sw1 == 0x9C and sw2 == 0x01:
+            if (sw1, sw2) == SW.SW_WRONG_PUK:
                 logger.info("[card_bip32_get_extendedkey] Reset memory...")
                 apdu[3] = apdu[3] ^ 0x80
                 response, sw1, sw2 = self.card_transmit(apdu)
                 apdu[3] = apdu[3] & 0x7F
-            if sw1 != 0x90 or sw2 != 0x00:
+            if (sw1, sw2) != SW.SW_OK:
                 raise UnexpectedSW12Error(
                     _MSG_UNEXPECTED_ERROR, sw1, sw2
                 )
-            if sw1 == 0x90 and sw2 == 0x00:
+            if (sw1, sw2) == SW.SW_OK:
                 if (option_flags & 0x02) == 0x00:  # BIP32 pubkey
                     if (response[32] & 0x80) == 0x80:
                         logger.info(
@@ -889,10 +877,6 @@ class CardConnector:
                         )
                     )
                     return privkey, chaincode
-
-    ###########################################
-    #            Signing commands             #
-    ###########################################
 
     def card_sign_message(self, keynbr, pubkey, message, chalresponse=None):
         """Sign the message with the device.
@@ -943,7 +927,7 @@ class CardConnector:
         buffer_left -= chunk
         response, sw1, sw2 = self.card_transmit(apdu)
 
-        if sw1 != 0x90 or sw2 != 0x00:
+        if (sw1, sw2) != SW.SW_OK:
             logger.warning(
                 f"Unexpected error in card_sign_message() "
                 f"(SW {hex(256 * sw1 + sw2)})"
@@ -1029,10 +1013,6 @@ class CardConnector:
         response, sw1, sw2 = self.card_transmit(apdu)
         return response, sw1, sw2
 
-    ###########################################
-    #          Taproot / Schnorr              #
-    ###########################################
-
     def card_taproot_tweak_privkey(
         self, keynbr, tweak=None, bypass_flag=False
     ):
@@ -1065,10 +1045,6 @@ class CardConnector:
         response, sw1, sw2 = self.card_transmit(apdu)
         return response, sw1, sw2
 
-    ###########################################
-    #          Card feature policy            #
-    ###########################################
-
     def card_set_feature_policy(self, feature_id_byte, feature_policy_byte):
         """Enable or disable an optional card feature.
 
@@ -1085,10 +1061,6 @@ class CardConnector:
         response, sw1, sw2 = self.card_transmit(apdu)
         return response, sw1, sw2
 
-    ###########################################
-    #             NFC / NDEF                  #
-    ###########################################
-
     def card_set_nfc_policy(self, policy_byte):
         """Set NFC contactless interface policy.
 
@@ -1103,10 +1075,6 @@ class CardConnector:
         apdu = [cla, ins, p1, p2, 0]
         response, sw1, sw2 = self.card_transmit(apdu)
         return response, sw1, sw2
-
-    ###########################################
-    #              Seed reset                 #
-    ###########################################
 
     def card_reset_seed(self, pin):
         """Reset (wipe) the BIP32 seed on the card.
@@ -1128,13 +1096,9 @@ class CardConnector:
         apdu = [cla, ins, p1, p2, lc] + pin
 
         response, sw1, sw2 = self.card_transmit(apdu)
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             self.is_seeded = False
         return response, sw1, sw2
-
-    ###########################################
-    #                PIN commands             #
-    ###########################################
 
     def card_verify_PIN_simple(self, pin=None):
         """Verify card PIN."""
@@ -1168,7 +1132,7 @@ class CardConnector:
             apdu = self.card_encrypt_secure_channel(apdu)
         response, sw1, sw2 = self._do_transmit(apdu)
 
-        if sw1 == 0x9C and sw2 == 0x21:
+        if (sw1, sw2) == SW.SW_SECURE_CHANNEL_REQUIRED:
             logger.error(
                 "In card_verify_PIN_simple secure channel "
                 "not initialized (0x9C21)"
@@ -1178,7 +1142,7 @@ class CardConnector:
             apdu = self.card_encrypt_secure_channel(apdu)
             response, sw1, sw2 = self._do_transmit(apdu)
 
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             self.set_pin(0, pin_0)
             return response, sw1, sw2
         elif sw1 == 0x63 and (sw2 & 0xC0) == 0xC0:
@@ -1186,17 +1150,17 @@ class CardConnector:
             self.set_pin(0, None)
             pin_left = sw2 & 0x3F
             raise WrongPinError(_MSG_WRONG_PIN.format(pin_left), pin_left)
-        elif sw1 == 0x9C and sw2 == 0x02:
+        elif (sw1, sw2) == SW.SW_WRONG_PIN:
             logger.error("In card_verify_PIN_simple wrong PIN!")
             self.set_pin(0, None)
             response2, sw1b, sw2b, d = self.card_get_status()
             pin_left = d.get("PIN0_remaining_tries", -1)
             raise WrongPinError(_MSG_WRONG_PIN.format(pin_left), pin_left)
-        elif sw1 == 0x9C and sw2 == 0x0C:
+        elif (sw1, sw2) == SW.SW_PIN_BLOCKED:
             logger.error("In card_verify_PIN_simple Blocked PIN!")
             self.set_pin(0, None)
             raise PinBlockedError(_MSG_PIN_BLOCKED)
-        elif sw1 == 0x9C and sw2 == 0x04:
+        elif (sw1, sw2) == SW.SW_SETUP_NOT_DONE:
             logger.error("In card_verify_PIN_simple setup not done")
             raise CardSetupNotDoneError(
                 _("Card setup is not complete. Please set up the card first.")
@@ -1225,7 +1189,7 @@ class CardConnector:
         )
         response, sw1, sw2 = self.card_transmit(apdu)
 
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             self.set_pin(pin_nbr, new_pin)
         elif sw1 == 0x63 and (sw2 & 0xC0) == 0xC0:
             self.set_pin(pin_nbr, None)
@@ -1233,14 +1197,14 @@ class CardConnector:
             raise WrongPinError(
                 _MSG_WRONG_PIN.format(pin_left), pin_left
             )
-        elif sw1 == 0x9C and sw2 == 0x02:
+        elif (sw1, sw2) == SW.SW_WRONG_PIN:
             self.set_pin(pin_nbr, None)
             response2, sw1b, sw2b, d = self.card_get_status()
             pin_left = d.get("PIN0_remaining_tries", -1)
             raise WrongPinError(
                 _MSG_WRONG_PIN.format(pin_left), pin_left
             )
-        elif sw1 == 0x9C and sw2 == 0x0C:
+        elif (sw1, sw2) == SW.SW_PIN_BLOCKED:
             raise PinBlockedError(_MSG_PIN_BLOCKED)
 
         return response, sw1, sw2
@@ -1256,27 +1220,23 @@ class CardConnector:
             apdu = self.card_encrypt_secure_channel(apdu)
         response, sw1, sw2 = self._do_transmit(apdu)
 
-        if sw1 == 0x90 and sw2 == 0x00:
+        if (sw1, sw2) == SW.SW_OK:
             self.set_pin(pin_nbr, None)
         elif sw1 == 0x63 and (sw2 & 0xC0) == 0xC0:
             puk_left = sw2 & 0x3F
             raise WrongPinError(
                 _MSG_WRONG_PIN.format(puk_left), puk_left
             )
-        elif sw1 == 0x9C and sw2 == 0x02:
+        elif (sw1, sw2) == SW.SW_WRONG_PIN:
             response2, sw1b, sw2b, d = self.card_get_status()
             puk_left = d.get("PUK0_remaining_tries", -1)
             raise WrongPinError(
                 _MSG_WRONG_PIN.format(puk_left), puk_left
             )
-        elif sw1 == 0x9C and sw2 == 0x0C:
+        elif (sw1, sw2) == SW.SW_PIN_BLOCKED:
             raise PinBlockedError(_MSG_PIN_BLOCKED)
 
         return response, sw1, sw2
-
-    ###########################################
-    #            Secure Channel               #
-    ###########################################
 
     def card_initiate_secure_channel(self):
         logger.debug("In card_initiate_secure_channel()")

@@ -12,7 +12,6 @@ class JCconstants:
     INS_GET_STATUS = 0x3C
     INS_CARD_LABEL = 0x3D
     INS_NFC_POLICY = 0x3E
-    INS_NDEF = 0x3F
     INS_FEATURE_POLICY = 0x3A
     INS_SETUP = 0x2A
     INS_CREATE_PIN = 0x40
@@ -38,3 +37,15 @@ class JCconstants:
     OP_INIT = 0x01
     OP_PROCESS = 0x02
     OP_FINALIZE = 0x03
+
+
+class SW:
+    SW_OK = (0x90, 0x00)
+    SW_SETUP_NOT_DONE = (0x9C, 0x04)
+    SW_WRONG_PIN = (0x9C, 0x02)
+    SW_PIN_BLOCKED = (0x9C, 0x0C)
+    SW_SECURE_CHANNEL_REQUIRED = (0x9C, 0x21)
+    SW_SEED_NOT_SET = (0x9C, 0x14)
+    SW_WRONG_PUK = (0x9C, 0x01)
+    SW_ALREADY_SEEDED = (0x9C, 0x17)
+    SW_INVALID_PARAMETER = (0x9C, 0x0F)

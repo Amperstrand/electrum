@@ -157,16 +157,14 @@ class SatochipClient(HardwareClientBase):
         try:
             time.sleep(0.3)
             if not self._ensure_card_connection():
-                return None
+                return False
             self.cc.card_get_status()
         except CardNotPresentError:
-            return None
+            return False
 
-        if self.cc.setup_done is None:
-            return None
         if not self.cc.setup_done:
-            return None
-        if self.cc.setup_done and not self.cc.is_seeded:
+            return False
+        if not self.cc.is_seeded:
             return False
         return True
 
