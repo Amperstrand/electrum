@@ -343,20 +343,10 @@ class CardSwapDialog(WindowModalDialog):
 
 
 MSG_SEED_IMPORT = [
-    _('Your Satochip is currently unseeded. '),
-    _('To use it, you need to import a BIP39 Seed. '),
-    _('To do so, select BIP39 in the options in the next screen. '),
-    _('Note that Electrum seeds are not supported by hardware wallets. '),
-    ' ',
-    _('Optionally, you can also enable a passphrase in the options. '),
     _(
-        'A passphrase is an optional feature that allows you to '
-        'extend your seed with additional entropy. '
-    ),
-    _('A passphrase is not a PIN. '),
-    _(
-        'If set, you will need your passphrase along with '
-        'your BIP39 seed to restore your wallet from a backup. '
+        'Your Satochip is currently unseeded. '
+        'Import a BIP39 seed to use it (select BIP39 on the next screen). '
+        'Electrum seeds are not supported by hardware wallets.'
     ),
 ]
 
@@ -1188,20 +1178,28 @@ class WCSatochipBlocked(WalletWizardComponent):
 
         puk_note = WWLabel(
             _(
-                'If you have the PUK code that was set during card '
-                'initialization, you can use it to unblock the PIN '
-                'without losing data. Otherwise, you can wipe the '
-                'card to start over — this will permanently erase '
+                'If you have the PUK code set during card '
+                'initialization, press Next to unblock the PIN '
+                'without losing data.'
+            )
+        )
+        self.layout().addWidget(puk_note)
+
+        wipe_note = WWLabel(
+            _(
+                'If you do not have the PUK, you can wipe the '
+                'card to start over. This will permanently erase '
                 'all data.'
             )
         )
-        puk_note.setStyleSheet(ColorScheme.GRAY.as_stylesheet())
-        self.layout().addWidget(puk_note)
+        wipe_note.setStyleSheet(ColorScheme.GRAY.as_stylesheet())
+        self.layout().addWidget(wipe_note)
 
         self._reset_btn = QPushButton(_('Wipe Card'))
+        self._reset_btn.setFlat(True)
         self._reset_btn.setStyleSheet(
-            'QPushButton {{ background-color: {red}; color: white; '
-            'font-weight: bold; padding: 8px 16px; }}'.format(
+            'QPushButton {{ color: {red}; border: none; '
+            'padding: 4px 0; text-decoration: underline; }}'.format(
                 red=ColorScheme.RED.as_color().name()
             )
         )
