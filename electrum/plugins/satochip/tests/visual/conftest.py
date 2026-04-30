@@ -14,9 +14,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-if not os.environ.get("QT_QPA_PLATFORM"):
-    pass
-
 try:
     from PyQt5.QtCore import Qt  # noqa: F401
     os.environ.setdefault("PYTEST_QT_API", "pyqt5")

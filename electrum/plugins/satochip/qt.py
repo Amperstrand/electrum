@@ -1,57 +1,32 @@
-"""Satochip Qt plugin: settings dialog, wizard components, and handler."""
+'''Satochip Qt plugin: settings dialog, wizard components, and handler.'''
 
 import hashlib
 import secrets
 import threading
 from typing import TYPE_CHECKING
 
-import sys as _sys
-
-if 'PyQt5' in _sys.modules:
-    from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-    from PyQt5.QtGui import QPixmap
-    from PyQt5.QtWidgets import (
-        QComboBox,
-        QDialog,
-        QGridLayout,
-        QGroupBox,
-        QHBoxLayout,
-        QLabel,
-        QLineEdit,
-        QPushButton,
-        QRadioButton,
-        QSlider,
-        QTabWidget,
-        QVBoxLayout,
-        QWidget,
-    )
-else:
-    from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-    from PyQt6.QtGui import QPixmap
-    from PyQt6.QtWidgets import (
-        QComboBox,
-        QDialog,
-        QGridLayout,
-        QGroupBox,
-        QHBoxLayout,
-        QLabel,
-        QLineEdit,
-        QPushButton,
-        QRadioButton,
-        QSlider,
-        QTabWidget,
-        QVBoxLayout,
-        QWidget,
-    )
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QRadioButton,
+    QSlider,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from electrum.i18n import _
-from electrum.logging import get_logger
+from electrum.logging import get_logger, Logger
 from electrum.plugin import hook
-try:
-    from electrum.util import ChoiceItem
-except ImportError:
-    from collections import namedtuple
-    ChoiceItem = namedtuple("ChoiceItem", ["key", "label"])
+from electrum.util import ChoiceItem
 
 try:
     from electrum.hw_wallet.qt import QtHandlerBase, QtPluginBase
@@ -72,80 +47,16 @@ from electrum.gui.qt.util import (
     icon_path,
     line_dialog,
 )
-try:
-    from electrum.gui.qt.util import ChoiceWidget
-except ImportError:
-    ChoiceWidget = None
 
-try:
-    from electrum.gui.qt.wizard.wallet import (
-        WCScriptAndDerivation,
-        WCHWUnlock,
-        WCHWXPub,
-        WalletWizardComponent,
-        WCHaveSeed,
-        WCEnterExt,
-    )
-except ImportError:
-    WCScriptAndDerivation = None
-    WCHWXPub = None
-    WCHaveSeed = None
-    WCEnterExt = None
-
-    class WalletWizardComponent(QWidget):
-        updated = pyqtSignal(object)
-        validChanged = pyqtSignal([bool], arguments=["valid"])
-
-        def __init__(self, parent=None, wizard=None, **kwargs):
-            super().__init__(parent)
-            self.setLayout(QVBoxLayout(self))
-            self.wizard_data = {}
-            self.title = None
-            self.wizard_title = None
-            self.busy_msg = ''
-            self.wizard = wizard
-            self._error = ''
-            self._valid = False
-            self._busy = False
-
-        @property
-        def valid(self):
-            return self._valid
-
-        @valid.setter
-        def valid(self, value):
-            self._valid = value
-
-        @property
-        def busy(self):
-            return self._busy
-
-        @busy.setter
-        def busy(self, value):
-            self._busy = value
-
-        @property
-        def error(self):
-            return self._error
-
-        @error.setter
-        def error(self, value):
-            self._error = value
-
-        def on_ready(self):
-            pass
-
-        def apply(self):
-            pass
-
-        def on_updated(self, *args):
-            pass
-
-        def _on_valid_changed(self, valid):
-            pass
-
-    WCHWUnlock = WalletWizardComponent
-
+from electrum.gui.qt.util import ChoiceWidget
+from electrum.gui.qt.wizard.wallet import (
+    WCScriptAndDerivation,
+    WCHWUnlock,
+    WCHWXPub,
+    WalletWizardComponent,
+    WCHaveSeed,
+    WCEnterExt,
+)
 from .satochip import SatochipPlugin
 
 if TYPE_CHECKING:
@@ -153,10 +64,19 @@ if TYPE_CHECKING:
 
 _logger = get_logger(__name__)
 
+
+def _set_error_later(widget, msg):
+    QTimer.singleShot(0, lambda: setattr(widget, 'error', msg))
+
+
+def _set_busy_later(widget, val):
+    QTimer.singleShot(0, lambda: setattr(widget, 'busy', val))
+
+
 RECOMMEND_PIN = _(
-    "PIN protection is strongly recommended. A PIN is your only protection "
-    "against someone stealing your Bitcoin if they obtain physical "
-    "access to your Satochip."
+    'PIN protection is strongly recommended. A PIN is your only protection '
+    'against someone stealing your Bitcoin if they obtain physical '
+    'access to your Satochip.'
 )
 
 
@@ -170,9 +90,9 @@ class TypedConfirmationDialog(WindowModalDialog):
     """
 
     _DESTRUCTIVE_BTN_STYLE = (
-        "QPushButton { background-color: #c62828; color: white; "
-        "font-weight: bold; padding: 6px 18px; border-radius: 4px; }"
-        "QPushButton:disabled { background-color: #555; color: #999; }"
+        'QPushButton { background-color: #c62828; color: white; '
+        'font-weight: bold; padding: 6px 18px; border-radius: 4px; }'
+        'QPushButton:disabled { background-color: #555; color: #999; }'
     )
 
     def __init__(
@@ -191,19 +111,19 @@ class TypedConfirmationDialog(WindowModalDialog):
         vbox = QVBoxLayout(self)
 
         header = QLabel(
-            '<b><span style="color:{}">{}</span></b>'.format(
+            "<b><span style='color:{}'>{}</span></b>".format(
                 ColorScheme.RED.as_color().name(),
-                _("This action cannot be undone"),
+                _('This action cannot be undone'),
             )
         )
         vbox.addWidget(header)
 
         for w in warnings:
-            vbox.addWidget(QLabel("\u2022 " + w))
+            vbox.addWidget(QLabel('\u2022 ' + w))
 
         if balance_warning:
             bal_lbl = QLabel(
-                '<span style="color:{}">{}</span>'.format(
+                "<span style='color:{}'>{}</span>".format(
                     ColorScheme.RED.as_color().name(),
                     balance_warning,
                 )
@@ -214,7 +134,7 @@ class TypedConfirmationDialog(WindowModalDialog):
         vbox.addSpacing(12)
 
         phrase_lbl = QLabel(
-            _("Type {phrase} to confirm:").format(
+            _('Type {phrase} to confirm:').format(
                 phrase='<tt><b>{}</b></tt>'.format(confirm_phrase)
             )
         )
@@ -246,9 +166,9 @@ class CardSwapDialog(WindowModalDialog):
     """Full-screen-ish modal that guides the user through card removal and
     reinsertion during a factory reset. Uses a QTimer to poll card presence
     (via ``smartcard``) and displays:
-      - Phase REMOVAL: "Remove the card" with a pulsing animation
-      - Phase INSERTION: "Insert the card" with a countdown timer
-      - Phase DETECTED: brief "Card detected" confirmation, then auto-closes
+      - Phase REMOVAL: 'Remove the card' with a pulsing animation
+      - Phase INSERTION: 'Insert the card' with a countdown timer
+      - Phase DETECTED: brief 'Card detected' confirmation, then auto-closes
     Returns True from run() if the swap completed; False if cancelled.
     """
 
@@ -256,9 +176,9 @@ class CardSwapDialog(WindowModalDialog):
     _COUNTDOWN_SECS = 120
     _DETECTED_CLOSE_MS = 1500
 
-    _STATE_REMOVAL = "removal"
-    _STATE_INSERTION = "insertion"
-    _STATE_DETECTED = "detected"
+    _STATE_REMOVAL = 'removal'
+    _STATE_INSERTION = 'insertion'
+    _STATE_DETECTED = 'detected'
 
     _STYLE_SHEET = """
         QLabel { color: #eee; }
@@ -270,7 +190,7 @@ class CardSwapDialog(WindowModalDialog):
         QLabel#step-indicator { font-size: 12px; color: #888; }
         QPushButton { padding: 10px 24px; }
     """
-    _BG = "#1e1e2e"
+    _BG = '#1e1e2e'
 
     def __init__(
         self,
@@ -279,11 +199,11 @@ class CardSwapDialog(WindowModalDialog):
         remaining_steps: int = 0,
         total_steps: int = 0,
     ):
-        WindowModalDialog.__init__(self, parent, _("Card Swap Required"))
-        self.setWindowTitle(_("Card Swap Required"))
+        WindowModalDialog.__init__(self, parent, _('Card Swap Required'))
+        self.setWindowTitle(_('Card Swap Required'))
         self.setMinimumSize(420, 340)
         self.setStyleSheet(
-            f"QDialog {{ background-color: {self._BG}; }} {self._STYLE_SHEET}"
+            f'QDialog {{ background-color: {self._BG}; }} {self._STYLE_SHEET}'
         )
 
         self._phase = self._STATE_REMOVAL
@@ -296,31 +216,31 @@ class CardSwapDialog(WindowModalDialog):
         vbox.setSpacing(12)
 
         self._step_label = QLabel()
-        self._step_label.setObjectName("step-indicator")
+        self._step_label.setObjectName('step-indicator')
         self._step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vbox.addWidget(self._step_label)
         self._refresh_step_label()
 
         vbox.addStretch(1)
 
-        self._icon_label = QLabel("\u23cf")
-        self._icon_label.setObjectName("phase-icon")
+        self._icon_label = QLabel('\u23cf')
+        self._icon_label.setObjectName('phase-icon')
         self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vbox.addWidget(self._icon_label)
 
         self._title_label = QLabel()
-        self._title_label.setObjectName("phase-title")
+        self._title_label.setObjectName('phase-title')
         self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vbox.addWidget(self._title_label)
 
         self._subtitle_label = QLabel()
-        self._subtitle_label.setObjectName("phase-subtitle")
+        self._subtitle_label.setObjectName('phase-subtitle')
         self._subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._subtitle_label.setWordWrap(True)
         vbox.addWidget(self._subtitle_label)
 
-        self._countdown_label = QLabel("")
-        self._countdown_label.setObjectName("countdown")
+        self._countdown_label = QLabel('')
+        self._countdown_label.setObjectName('countdown')
         self._countdown_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vbox.addWidget(self._countdown_label)
 
@@ -341,7 +261,7 @@ class CardSwapDialog(WindowModalDialog):
     def _refresh_step_label(self):
         if self._total_steps > 0:
             self._step_label.setText(
-                _("Step {current} of {total}").format(
+                _('Step {current} of {total}').format(
                     current=self._total_steps - self._remaining_steps + 1,
                     total=self._total_steps,
                 )
@@ -351,27 +271,27 @@ class CardSwapDialog(WindowModalDialog):
 
     def _refresh_phase(self):
         if self._phase == self._STATE_REMOVAL:
-            self._icon_label.setText("\u23cf")
-            self._title_label.setText(_("Remove the card"))
+            self._icon_label.setText('\u23cf')
+            self._title_label.setText(_('Remove the card'))
             self._subtitle_label.setText(
                 _(
-                    "Pull the Satochip from the reader, "
-                    "then wait for the prompt."
+                    'Pull the Satochip from the reader, '
+                    'then wait for the prompt.'
                 )
             )
-            self._countdown_label.setText("")
+            self._countdown_label.setText('')
         elif self._phase == self._STATE_INSERTION:
-            self._icon_label.setText("\u23cf")
-            self._title_label.setText(_("Insert the card"))
+            self._icon_label.setText('\u23cf')
+            self._title_label.setText(_('Insert the card'))
             self._subtitle_label.setText(
-                _("Place the Satochip back in the reader.")
+                _('Place the Satochip back in the reader.')
             )
             self._countdown_label.setText(str(self._countdown))
         elif self._phase == self._STATE_DETECTED:
-            self._icon_label.setText("\u2705")
-            self._title_label.setText(_("Card detected"))
-            self._subtitle_label.setText(_("Reconnecting\u2026"))
-            self._countdown_label.setText("")
+            self._icon_label.setText('\u2705')
+            self._title_label.setText(_('Card detected'))
+            self._subtitle_label.setText(_('Reconnecting\u2026'))
+            self._countdown_label.setText('')
 
     @staticmethod
     def _is_card_present() -> bool:
@@ -423,49 +343,43 @@ class CardSwapDialog(WindowModalDialog):
 
 
 MSG_SEED_IMPORT = [
-    _("Your Satochip is currently unseeded. "),
-    _("To use it, you need to import a BIP39 Seed. "),
-    _("To do so, select BIP39 in the options in the next screen. "),
-    _("Note that Electrum seeds are not supported by hardware wallets. "),
-    " ",
-    _("Optionally, you can also enable a passphrase in the options. "),
+    _('Your Satochip is currently unseeded. '),
+    _('To use it, you need to import a BIP39 Seed. '),
+    _('To do so, select BIP39 in the options in the next screen. '),
+    _('Note that Electrum seeds are not supported by hardware wallets. '),
+    ' ',
+    _('Optionally, you can also enable a passphrase in the options. '),
     _(
-        "A passphrase is an optional feature that allows you to "
-        "extend your seed with additional entropy. "
+        'A passphrase is an optional feature that allows you to '
+        'extend your seed with additional entropy. '
     ),
-    _("A passphrase is not a PIN. "),
+    _('A passphrase is not a PIN. '),
     _(
-        "If set, you will need your passphrase along with "
-        "your BIP39 seed to restore your wallet from a backup. "
+        'If set, you will need your passphrase along with '
+        'your BIP39 seed to restore your wallet from a backup. '
     ),
 ]
 
 
 # ---------------------------------------------------------------------------
-# QtHandler
 # ---------------------------------------------------------------------------
 
 
-class QtHandler(QtHandlerBase):
-    """Qt handler for Satochip device interactions (PIN dialog, messages)."""
+class Satochip_Handler(QtHandlerBase):
+    '''Qt handler for Satochip device interactions (PIN dialog, messages).'''
 
-    MESSAGE_DIALOG_TITLE = _("Satochip Status")
+    MESSAGE_DIALOG_TITLE = _('Satochip Status')
 
     def __init__(self, win, device):
         super().__init__(win, device)
 
 
-# ---------------------------------------------------------------------------
-# Plugin  (SatochipPlugin + QtPluginBase)
-# ---------------------------------------------------------------------------
-
-
 class Plugin(SatochipPlugin, QtPluginBase):
-    icon_unpaired = "satochip_unpaired.png"
-    icon_paired = "satochip.png"
+    icon_unpaired = 'satochip_unpaired.png'
+    icon_paired = 'satochip.png'
 
     def create_handler(self, window):
-        return QtHandler(window, self.device)
+        return Satochip_Handler(window, self.device)
 
     @only_hook_if_libraries_available
     @hook
@@ -496,60 +410,55 @@ class Plugin(SatochipPlugin, QtPluginBase):
 
     @only_hook_if_libraries_available
     @hook
-    def init_wallet_wizard(self, wizard: "QENewWalletWizard"):
+    def init_wallet_wizard(self, wizard: 'QENewWalletWizard'):
         self.extend_wizard(wizard)
 
-    def extend_wizard(self, wizard: "QENewWalletWizard"):
+    def extend_wizard(self, wizard: 'QENewWalletWizard'):
         super().extend_wizard(wizard)
         views = {
-            "satochip_start": {"gui": WCScriptAndDerivation},
-            "satochip_xpub": {"gui": WCHWXPub},
-            "satochip_not_setup": {"gui": WCSatochipSetupParams},
-            "satochip_do_setup": {"gui": WCSatochipSetup},
-            "satochip_not_seeded": {
-                "gui": WCSeedMethodChoice,
+            'satochip_start': {'gui': WCScriptAndDerivation},
+            'satochip_xpub': {'gui': WCHWXPub},
+            'satochip_not_setup': {'gui': WCSatochipSetupParams},
+            'satochip_do_setup': {'gui': WCSatochipSetup},
+            'satochip_not_seeded': {
+                'gui': WCSeedMethodChoice,
             },
-            "satochip_generate_seed": {
-                "gui": WCSatochipGenerateSeed,
+            'satochip_generate_seed': {
+                'gui': WCSatochipGenerateSeed,
             },
-            "satochip_have_seed": {
-                "gui": WCHaveSeed,
-                "next": lambda d: self._next_seed_ext(wizard, d),
-                "params": {"seed_options": ["ext", "bip39"]},
+            'satochip_have_seed': {
+                'gui': WCHaveSeed,
+                'next': lambda d: self._next_seed_ext(wizard, d),
+                'params': {'seed_options': ['ext', 'bip39']},
             },
-            "satochip_have_ext": {
-                "gui": WCEnterExt,
-                "next": "satochip_import_seed",
+            'satochip_have_ext': {
+                'gui': WCEnterExt,
+                'next': 'satochip_import_seed',
             },
-            "satochip_import_seed": {
-                "gui": WCSatochipImportSeed,
+            'satochip_import_seed': {
+                'gui': WCSatochipImportSeed,
             },
-            "satochip_success_seed": {
-                "gui": WCSeedSuccess,
+            'satochip_success_seed': {
+                'gui': WCSeedSuccess,
             },
-            "satochip_unlock": {"gui": WCSatochipUnlock},
-            "satochip_blocked": {
-                "gui": WCSatochipBlocked,
-                "next": "choose_hardware_device",
+            'satochip_unlock': {'gui': WCSatochipUnlock},
+            'satochip_blocked': {
+                'gui': WCSatochipBlocked,
+                'next': 'choose_hardware_device',
             },
-            "satochip_wrong_card": {
-                "gui": WCSatochipWrongCard,
-                "next": "choose_hardware_device",
+            'satochip_wrong_card': {
+                'gui': WCSatochipWrongCard,
+                'next': 'choose_hardware_device',
             },
-            "satochip_recover_setup": {
-                "gui": WCSatochipRecoverSetup,
+            'satochip_recover_setup': {
+                'gui': WCSatochipRecoverSetup,
             },
-            "satochip_recover_seed": {
-                "gui": WCSatochipRecoverSeed,
-                "next": "satochip_unlock",
+            'satochip_recover_seed': {
+                'gui': WCSatochipRecoverSeed,
+                'next': 'satochip_unlock',
             },
         }
         wizard.navmap_merge(views)
-
-
-# ---------------------------------------------------------------------------
-# Settings Dialog
-# ---------------------------------------------------------------------------
 
 
 class SatochipSettingsDialog(WindowModalDialog):
@@ -563,7 +472,7 @@ class SatochipSettingsDialog(WindowModalDialog):
     _MIN_PROTOCOL_VERSION = (0 << 8) | 12
 
     def __init__(self, window, plugin, keystore, device_id):
-        title = _("{} Settings").format(plugin.device)
+        title = _('{} Settings').format(plugin.device)
         super().__init__(window, title)
         self.setMaximumWidth(540)
 
@@ -575,9 +484,9 @@ class SatochipSettingsDialog(WindowModalDialog):
         self._setup_done = False
 
         tabs = QTabWidget(self)
-        tabs.addTab(self._build_info_tab(), _("Information"))
-        tabs.addTab(self._build_settings_tab(), _("Settings"))
-        tabs.addTab(self._build_advanced_tab(), _("Advanced"))
+        tabs.addTab(self._build_info_tab(), _('Information'))
+        tabs.addTab(self._build_settings_tab(), _('Settings'))
+        tabs.addTab(self._build_advanced_tab(), _('Advanced'))
 
         dialog_vbox = QVBoxLayout(self)
         dialog_vbox.addWidget(tabs)
@@ -592,7 +501,7 @@ class SatochipSettingsDialog(WindowModalDialog):
     def _fetch_client(self):
         client = self.devmgr.client_by_id(self.device_id)
         if not client:
-            raise RuntimeError("Device not connected")
+            raise RuntimeError('Device not connected')
         return client
 
     def _fetch_card_info(self):
@@ -601,62 +510,62 @@ class SatochipSettingsDialog(WindowModalDialog):
         try:
             (response, sw1, sw2, d) = client.cc.card_get_status()
         except Exception as e:
-            info["error"] = str(e)
+            info['error'] = str(e)
             return info
 
         if sw1 != 0x90 or sw2 != 0x00:
             return info
 
-        info["fw_rel"] = "v{}.{}-{}.{}".format(
-            d["protocol_major_version"],
-            d["protocol_minor_version"],
-            d["applet_major_version"],
-            d["applet_minor_version"],
+        info['fw_rel'] = 'v{}.{}-{}.{}'.format(
+            d['protocol_major_version'],
+            d['protocol_minor_version'],
+            d['applet_major_version'],
+            d['applet_minor_version'],
         )
-        info["protocol_version"] = d.get("protocol_version", 0)
-        info["pin_tries"] = d.get("PIN0_remaining_tries", "?")
-        info["setup_done"] = d.get("setup_done", False)
+        info['protocol_version'] = d.get('protocol_version', 0)
+        info['pin_tries'] = d.get('PIN0_remaining_tries', '?')
+        info['setup_done'] = d.get('setup_done', False)
 
         if len(response) >= 10:
-            info["is_seeded"] = d["is_seeded"]
+            info['is_seeded'] = d['is_seeded']
         else:
             try:
                 client.cc.card_bip32_get_authentikey()
-                info["is_seeded"] = True
+                info['is_seeded'] = True
             except Exception:
-                info["is_seeded"] = False
+                info['is_seeded'] = False
 
         try:
-            device_id_str = getattr(client.cc, "UID_SHA1", None)
+            device_id_str = getattr(client.cc, 'UID_SHA1', None)
             if device_id_str:
-                info["device_id"] = device_id_str[:8].upper()
+                info['device_id'] = device_id_str[:8].upper()
             else:
                 device_id_str = client.get_authentikey_fingerprint()
                 if device_id_str:
-                    info["device_id"] = device_id_str.upper()
+                    info['device_id'] = device_id_str.upper()
         except Exception:
-            _logger.debug("Could not fetch device ID", exc_info=True)
+            _logger.debug('Could not fetch device ID', exc_info=True)
 
         try:
             (_d1, _d2, _d3, label) = client.cc.card_get_label()
-            info["label"] = label if label and label.strip() else ""
+            info['label'] = label if label and label.strip() else ''
         except Exception:
-            _logger.debug("card_get_label failed", exc_info=True)
+            _logger.debug('card_get_label failed', exc_info=True)
 
-        reader_full = getattr(client, "reader_full_name", None)
+        reader_full = getattr(client, 'reader_full_name', None)
         if reader_full:
             from .satochip import _classify_reader
             cls = _classify_reader(reader_full)
-            info["reader"] = f"{reader_full}, {cls}" if cls else reader_full
+            info['reader'] = f'{reader_full}, {cls}' if cls else reader_full
 
         try:
-            info["taproot"] = client.supports_taproot()
+            info['taproot'] = client.supports_taproot()
         except Exception:
-            info["taproot"] = False
+            info['taproot'] = False
 
-        info["nfc_policy"] = getattr(client.cc, "nfc_policy", None)
-        info["schnorr_policy"] = getattr(
-            client.cc, "feature_schnorr_policy", None
+        info['nfc_policy'] = getattr(client.cc, 'nfc_policy', None)
+        info['schnorr_policy'] = getattr(
+            client.cc, 'feature_schnorr_policy', None
         )
 
         return info
@@ -678,8 +587,8 @@ class SatochipSettingsDialog(WindowModalDialog):
         grid.setColumnStretch(2, 1)
 
         header = QLabel(
-            '<center><span style="font-size: x-large">Satochip</span>'
-            '<br><a href="https://satochip.io">satochip.io</a></center>'
+            "<center><span style='font-size: x-large'>Satochip</span>"
+            "<br><a href='https://satochip.io'>satochip.io</a></center>"
         )
         header.setTextInteractionFlags(
             Qt.TextInteractionFlag.LinksAccessibleByMouse
@@ -689,15 +598,15 @@ class SatochipSettingsDialog(WindowModalDialog):
 
         y = 2
         for member_name, label_text in [
-            ("fw_version", _("Applet Version:")),
-            ("device_id_label", _("Device ID:")),
-            ("card_status", _("Card Status:")),
-            ("pin_tries", _("PIN tries remaining:")),
-            ("reader_name", _("Card reader:")),
-            ("taproot_status", _("Taproot / Schnorr:")),
-            ("nfc_policy_status", _("NFC policy:")),
+            ('fw_version', _('Applet Version:')),
+            ('device_id_label', _('Device ID:')),
+            ('card_status', _('Card Status:')),
+            ('pin_tries', _('PIN tries remaining:')),
+            ('reader_name', _('Card reader:')),
+            ('taproot_status', _('Taproot / Schnorr:')),
+            ('nfc_policy_status', _('NFC policy:')),
         ]:
-            widget = QLabel("<tt></tt>")
+            widget = QLabel('<tt></tt>')
             widget.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse
                 | Qt.TextInteractionFlag.TextSelectableByKeyboard
@@ -719,20 +628,20 @@ class SatochipSettingsDialog(WindowModalDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        timeout_group = QGroupBox(_("Session Timeout"))
+        timeout_group = QGroupBox(_('Session Timeout'))
         timeout_vbox = QVBoxLayout(timeout_group)
         timeout_msg = QLabel(
             _(
-                "Automatically lock the device after a period of inactivity. "
-                "Once locked, you will need to enter your PIN "
-                "again to use the device."
+                'Automatically lock the device after a period of inactivity. '
+                'Once locked, you will need to enter your PIN '
+                'again to use the device.'
             )
         )
         timeout_msg.setWordWrap(True)
         timeout_vbox.addWidget(timeout_msg)
 
         timeout_hbox = QHBoxLayout()
-        self.timeout_label = QLabel(_("5 minutes"))
+        self.timeout_label = QLabel(_('5 minutes'))
         self.timeout_label.setMinimumWidth(80)
         timeout_slider = QSlider(Qt.Orientation.Horizontal)
         timeout_slider.setRange(1, 60)
@@ -741,20 +650,20 @@ class SatochipSettingsDialog(WindowModalDialog):
         timeout_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
 
         current_timeout = (
-            self.config.get("satochip_session_timeout", 300) // 60
+            self.config.get('satochip_session_timeout', 300) // 60
         )
         timeout_slider.setValue(current_timeout)
-        self.timeout_label.setText(_("{:d} minutes").format(current_timeout))
+        self.timeout_label.setText(_('{:d} minutes').format(current_timeout))
 
         def timeout_changed(value):
-            self.timeout_label.setText(_("{:d} minutes").format(value))
+            self.timeout_label.setText(_('{:d} minutes').format(value))
 
         def timeout_released():
             mins = timeout_slider.value()
             self.config.set_key(
-                "satochip_session_timeout", mins * 60, save=True
+                'satochip_session_timeout', mins * 60, save=True
             )
-            _logger.info(f"Session timeout set to {mins} minutes")
+            _logger.info(f'Session timeout set to {mins} minutes')
 
         timeout_slider.valueChanged.connect(timeout_changed)
         timeout_slider.sliderReleased.connect(timeout_released)
@@ -764,28 +673,28 @@ class SatochipSettingsDialog(WindowModalDialog):
         timeout_vbox.addLayout(timeout_hbox)
         layout.addWidget(timeout_group)
 
-        label_group = QGroupBox(_("Card Label"))
+        label_group = QGroupBox(_('Card Label'))
         label_vbox = QVBoxLayout(label_group)
-        self.card_label_display = QLabel("<tt>(none)</tt>")
+        self.card_label_display = QLabel('<tt>(none)</tt>')
         label_vbox.addWidget(self.card_label_display)
-        change_label_btn = QPushButton(_("Change Label"))
+        change_label_btn = QPushButton(_('Change Label'))
         change_label_btn.clicked.connect(
-            lambda: self._invoke_client("change_card_label")
+            lambda: self._invoke_client('change_card_label')
         )
         label_vbox.addWidget(change_label_btn)
         label_msg = QLabel(
-            _("The label is stored on the card and helps identify it.")
+            _('The label is stored on the card and helps identify it.')
         )
         label_msg.setWordWrap(True)
         label_msg.setStyleSheet(ColorScheme.GRAY.as_stylesheet())
         label_vbox.addWidget(label_msg)
         layout.addWidget(label_group)
 
-        pin_group = QGroupBox(_("PIN Management"))
+        pin_group = QGroupBox(_('PIN Management'))
         pin_vbox = QVBoxLayout(pin_group)
-        self._pin_btn = QPushButton(_("Change PIN"))
+        self._pin_btn = QPushButton(_('Change PIN'))
         self._pin_btn.clicked.connect(
-            lambda: self._invoke_client("change_pin")
+            lambda: self._invoke_client('change_pin')
         )
         pin_vbox.addWidget(self._pin_btn)
         pin_msg = QLabel(RECOMMEND_PIN)
@@ -794,37 +703,37 @@ class SatochipSettingsDialog(WindowModalDialog):
         pin_vbox.addWidget(pin_msg)
         layout.addWidget(pin_group)
 
-        feature_group = QGroupBox(_("Card Features"))
+        feature_group = QGroupBox(_('Card Features'))
         feature_vbox = QVBoxLayout(feature_group)
 
         schnorr_hbox = QHBoxLayout()
-        schnorr_hbox.addWidget(QLabel(_("Schnorr signatures:")))
+        schnorr_hbox.addWidget(QLabel(_('Schnorr signatures:')))
         self.schnorr_combo = QComboBox()
-        self.schnorr_combo.addItem(_("Enabled"), 0x00)
-        self.schnorr_combo.addItem(_("Disabled"), 0x01)
-        self.schnorr_combo.addItem(_("Blocked"), 0x02)
+        self.schnorr_combo.addItem(_('Enabled'), 0x00)
+        self.schnorr_combo.addItem(_('Disabled'), 0x01)
+        self.schnorr_combo.addItem(_('Blocked'), 0x02)
         schnorr_hbox.addWidget(self.schnorr_combo)
-        schnorr_apply = QPushButton(_("Apply"))
+        schnorr_apply = QPushButton(_('Apply'))
         schnorr_apply.clicked.connect(self._apply_schnorr_policy)
         schnorr_hbox.addWidget(schnorr_apply)
         feature_vbox.addLayout(schnorr_hbox)
 
         nfc_hbox = QHBoxLayout()
-        nfc_hbox.addWidget(QLabel(_("NFC contactless:")))
+        nfc_hbox.addWidget(QLabel(_('NFC contactless:')))
         self.nfc_combo = QComboBox()
-        self.nfc_combo.addItem(_("Enabled"), 0x00)
-        self.nfc_combo.addItem(_("Disabled"), 0x01)
-        self.nfc_combo.addItem(_("Deactivated"), 0x02)
+        self.nfc_combo.addItem(_('Enabled'), 0x00)
+        self.nfc_combo.addItem(_('Disabled'), 0x01)
+        self.nfc_combo.addItem(_('Deactivated'), 0x02)
         nfc_hbox.addWidget(self.nfc_combo)
-        nfc_apply = QPushButton(_("Apply"))
+        nfc_apply = QPushButton(_('Apply'))
         nfc_apply.clicked.connect(self._apply_nfc_policy)
         nfc_hbox.addWidget(nfc_apply)
         feature_vbox.addLayout(nfc_hbox)
 
         feature_note = QLabel(
             _(
-                "These settings are stored on the card "
-                "and persist across sessions."
+                'These settings are stored on the card '
+                'and persist across sessions.'
             )
         )
         feature_note.setWordWrap(True)
@@ -839,32 +748,32 @@ class SatochipSettingsDialog(WindowModalDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        wipe_group = QGroupBox(_("Wipe Card"))
+        wipe_group = QGroupBox(_('Wipe Card'))
         wipe_vbox = QVBoxLayout(wipe_group)
-        wipe_btn = QPushButton(_("Wipe Card\u2026"))
+        wipe_btn = QPushButton(_('Wipe Card\u2026'))
         wipe_btn.clicked.connect(
             lambda: self._invoke_client(
-                "factory_reset", unpair_after=True,
+                'factory_reset', unpair_after=True,
                 on_complete=lambda: self.show_placeholders(None),
             )
         )
         wipe_vbox.addWidget(wipe_btn)
         wipe_subtext = QLabel(
             _(
-                "Permanently erases the seed phrase and PIN. "
-                "Requires confirmation."
+                'Permanently erases the seed phrase and PIN. '
+                'Requires confirmation.'
             )
         )
         wipe_subtext.setWordWrap(True)
         wipe_vbox.addWidget(wipe_subtext)
-        wipe_warning = QLabel(_("<b>This action is irreversible.</b>"))
+        wipe_warning = QLabel(_('<b>This action is irreversible.</b>'))
         wipe_warning.setStyleSheet(ColorScheme.RED.as_stylesheet())
         wipe_warning.setWordWrap(True)
         wipe_vbox.addWidget(wipe_warning)
         wipe_note = QLabel(
             _(
-                "The wipe may require removing and reinserting the card "
-                "several times. You will be guided through each step."
+                'The wipe may require removing and reinserting the card '
+                'several times. You will be guided through each step.'
             )
         )
         wipe_note.setWordWrap(True)
@@ -878,20 +787,20 @@ class SatochipSettingsDialog(WindowModalDialog):
     # ------------------------------------------------------------------
 
     def show_placeholders(self, error):
-        """Show placeholder values when the card is not connected."""
-        self.fw_version.setText("<tt>—</tt>")
-        self.device_id_label.setText("<tt>—</tt>")
-        self.card_status.setText("<tt>%s</tt>" % _("Not connected"))
-        self.pin_tries.setText("<tt>—</tt>")
-        self.reader_name.setText("<tt>—</tt>")
-        self.taproot_status.setText("<tt>—</tt>")
-        self.nfc_policy_status.setText("<tt>—</tt>")
-        self.card_label_display.setText("<tt>(none)</tt>")
+        '''Show placeholder values when the card is not connected.'''
+        self.fw_version.setText('<tt>—</tt>')
+        self.device_id_label.setText('<tt>—</tt>')
+        self.card_status.setText('<tt>%s</tt>' % _('Not connected'))
+        self.pin_tries.setText('<tt>—</tt>')
+        self.reader_name.setText('<tt>—</tt>')
+        self.taproot_status.setText('<tt>—</tt>')
+        self.nfc_policy_status.setText('<tt>—</tt>')
+        self.card_label_display.setText('<tt>(none)</tt>')
 
     def _pin_entry_dialog(self, msg):
-        """Show a PIN entry dialog and return the entered text or None."""
+        '''Show a PIN entry dialog and return the entered text or None.'''
         parent = self.top_level_window()
-        d = WindowModalDialog(parent, _("Enter PIN"))
+        d = WindowModalDialog(parent, _('Enter PIN'))
         pw = PasswordLineEdit()
         pw.setMinimumWidth(200)
         vbox = QVBoxLayout()
@@ -902,123 +811,123 @@ class SatochipSettingsDialog(WindowModalDialog):
         return pw.text() if d.exec() else None
 
     def _label_dialog(self, msg):
-        """Show a label entry dialog and return the entered text or None."""
+        '''Show a label entry dialog and return the entered text or None.'''
         parent = self.top_level_window()
         while True:
             label = line_dialog(
                 parent=parent,
-                title=_("Enter Label"),
+                title=_('Enter Label'),
                 label=msg,
-                ok_label=_("OK"),
+                ok_label=_('OK'),
             )
-            if label is None or len(label.encode("utf-8")) <= 64:
+            if label is None or len(label.encode('utf-8')) <= 64:
                 return label
-            self.window.show_error(_("Label must be 64 characters or less!"))
+            self.window.show_error(_('Label must be 64 characters or less!'))
 
     # ------------------------------------------------------------------
     # Tab data loading
     # ------------------------------------------------------------------
 
     def show_values(self, info):
-        if info.get("error"):
-            self.window.show_error(info["error"])
+        if info.get('error'):
+            self.window.show_error(info['error'])
             return
 
         if not info:
-            self.fw_version.setText("<tt>{}</tt>".format(_("(uninitialized)")))
-            self.device_id_label.setText("<tt>{}</tt>".format(_("(none)")))
-            self.card_status.setText("<tt>%s</tt>" % _("Not initialized"))
-            self.pin_tries.setText("<tt>—</tt>")
-            self.card_label_display.setText("<tt>%s</tt>" % _("Not set"))
-            self.reader_name.setText("<tt>{}</tt>".format(_("(none)")))
+            self.fw_version.setText('<tt>{}</tt>'.format(_('(uninitialized)')))
+            self.device_id_label.setText('<tt>{}</tt>'.format(_('(none)')))
+            self.card_status.setText('<tt>%s</tt>' % _('Not initialized'))
+            self.pin_tries.setText('<tt>—</tt>')
+            self.card_label_display.setText('<tt>%s</tt>' % _('Not set'))
+            self.reader_name.setText('<tt>{}</tt>'.format(_('(none)')))
             return
 
-        self.fw_version.setText("<tt>%s</tt>" % info["fw_rel"])
+        self.fw_version.setText('<tt>%s</tt>' % info['fw_rel'])
 
-        protocol_ver = info.get("protocol_version", 0)
+        protocol_ver = info.get('protocol_version', 0)
         if protocol_ver < self._MIN_PROTOCOL_VERSION:
             _logger.debug(
-                "Protocol version 0x%04x below min 0x%04x.",
+                'Protocol version 0x%04x below min 0x%04x.',
                 protocol_ver,
                 self._MIN_PROTOCOL_VERSION,
             )
 
-        if "device_id" in info:
-            self.device_id_label.setText("<tt>%s</tt>" % info["device_id"])
+        if 'device_id' in info:
+            self.device_id_label.setText('<tt>%s</tt>' % info['device_id'])
         else:
             self.device_id_label.setText(
-                "<tt>{}</tt>".format(_("(unavailable)"))
+                '<tt>{}</tt>'.format(_('(unavailable)'))
             )
 
-        setup_done = info["setup_done"]
-        is_seeded = info.get("is_seeded", False)
-        pin_tries = info["pin_tries"]
+        setup_done = info['setup_done']
+        is_seeded = info.get('is_seeded', False)
+        pin_tries = info['pin_tries']
 
         if setup_done:
             if isinstance(pin_tries, int) and pin_tries == 0:
-                card_status_str = _("PIN blocked")
+                card_status_str = _('PIN blocked')
             elif is_seeded:
-                card_status_str = _("Ready")
+                card_status_str = _('Ready')
             else:
-                card_status_str = _("Initialized, no seed")
+                card_status_str = _('Initialized, no seed')
         else:
-            card_status_str = _("Not initialized")
-        self.card_status.setText("<tt>%s</tt>" % card_status_str)
+            card_status_str = _('Not initialized')
+        self.card_status.setText('<tt>%s</tt>' % card_status_str)
         self._setup_done = setup_done
         self._pin_btn.setText(
-            _("Set PIN") if not setup_done else _("Change PIN")
+            _('Set PIN') if not setup_done else _('Change PIN')
         )
 
         if not setup_done:
-            self.pin_tries.setText("<tt>%s</tt>" % _("N/A"))
+            self.pin_tries.setText('<tt>%s</tt>' % _('N/A'))
         else:
-            self.pin_tries.setText("<tt>%s</tt>" % pin_tries)
+            self.pin_tries.setText('<tt>%s</tt>' % pin_tries)
 
-        if "label" in info:
-            label = info["label"] or _("Not set")
-            self.card_label_display.setText("<tt>%s</tt>" % label)
+        if 'label' in info:
+            label = info['label'] or _('Not set')
+            self.card_label_display.setText('<tt>%s</tt>' % label)
         else:
-            self.card_label_display.setText("<tt>{}</tt>".format(_("(error)")))
+            self.card_label_display.setText('<tt>{}</tt>'.format(_('(error)')))
 
-        if "reader" in info:
-            self.reader_name.setText("<tt>%s</tt>" % info["reader"])
+        if 'reader' in info:
+            self.reader_name.setText('<tt>%s</tt>' % info['reader'])
         else:
-            self.reader_name.setText("<tt>{}</tt>".format(_("(unknown)")))
+            self.reader_name.setText('<tt>{}</tt>'.format(_('(unknown)')))
 
-        taproot = info.get("taproot", False)
-        proto_ver = info.get("protocol_version", 0)
+        taproot = info.get('taproot', False)
+        proto_ver = info.get('protocol_version', 0)
         if taproot:
-            self.taproot_status.setText("<tt>%s</tt>" % _("Supported"))
+            self.taproot_status.setText('<tt>%s</tt>' % _('Supported'))
         elif proto_ver < 14:
             self.taproot_status.setText(
-                "<tt>{}</tt>".format(
-                    _("Not available (requires firmware v0.14+)")
+                '<tt>{}</tt>'.format(
+                    _('Not available (requires firmware v0.14+)')
                 )
             )
         else:
             self.taproot_status.setText(
-                "<tt>{}</tt>".format(_("Disabled on this card"))
+                '<tt>{}</tt>'.format(_('Disabled on this card'))
             )
 
-        nfc_policy = info.get("nfc_policy")
+        nfc_policy = info.get('nfc_policy')
         _NFC_LABELS = {
-            0x00: _("Enabled"),
-            0x01: _("Disabled"),
-            0x02: _("Deactivated"),
+            0x00: _('Enabled'),
+            0x01: _('Disabled'),
+            0x02: _('Deactivated'),
         }
         if nfc_policy is not None:
             self.nfc_policy_status.setText(
-                "<tt>%s</tt>" % _NFC_LABELS.get(nfc_policy, _("Unknown"))
+                '<tt>%s</tt>' % _NFC_LABELS.get(nfc_policy, _('Unknown'))
             )
             idx = self.nfc_combo.findData(nfc_policy)
             if idx >= 0:
                 self.nfc_combo.setCurrentIndex(idx)
         else:
             self.nfc_policy_status.setText(
-                "<tt>%s</tt>" % _("Not available")
+                '<tt>%s</tt>' % _('Not available')
             )
 
-        schnorr_policy = info.get("schnorr_policy")
+        schnorr_policy = info.get('schnorr_policy')
         if schnorr_policy is not None:
             idx = self.schnorr_combo.findData(schnorr_policy)
             if idx >= 0:
@@ -1029,12 +938,12 @@ class SatochipSettingsDialog(WindowModalDialog):
     # ------------------------------------------------------------------
 
     def change_pin(self, client):
-        _logger.info("In change_pin")
-        msg_oldpin = _("Enter your current PIN:")
-        msg_newpin = _("Enter a new PIN:")
-        msg_confirm = _("Confirm your new PIN:")
-        msg_error = _("The PIN values do not match! Please type PIN again!")
-        msg_cancel = _("PIN Change cancelled!")
+        _logger.info('In change_pin')
+        msg_oldpin = _('Enter your current PIN:')
+        msg_newpin = _('Enter a new PIN:')
+        msg_confirm = _('Confirm your new PIN:')
+        msg_error = _('The PIN values do not match! Please type PIN again!')
+        msg_cancel = _('PIN Change cancelled!')
 
         try:
             (is_pin, oldpin, newpin) = client.PIN_change_dialog(
@@ -1046,7 +955,7 @@ class SatochipSettingsDialog(WindowModalDialog):
             newpin = list(newpin)
             (response, sw1, sw2) = client.cc.card_change_PIN(0, oldpin, newpin)
             if sw1 == 0x90 and sw2 == 0x00:
-                self.window.show_message(_("PIN changed successfully!"))
+                self.window.show_message(_('PIN changed successfully!'))
                 self.thread.add(
                     self._fetch_card_info,
                     on_success=self.show_values,
@@ -1055,17 +964,17 @@ class SatochipSettingsDialog(WindowModalDialog):
             else:
                 self.window.show_error(
                     _(
-                        "Failed to change PIN. "
-                        "The current PIN may be incorrect."
+                        'Failed to change PIN. '
+                        'The current PIN may be incorrect.'
                     )
                 )
         except Exception as ex:
             self.window.show_error(
-                _("Failed to change PIN: {}").format(str(ex))
+                _('Failed to change PIN: {}').format(str(ex))
             )
 
     def change_card_label(self, client):
-        msg = _("Enter a label for your Satochip (max 64 characters):")
+        msg = _('Enter a label for your Satochip (max 64 characters):')
 
         is_ok = client.verify_PIN()
         if not is_ok:
@@ -1073,13 +982,13 @@ class SatochipSettingsDialog(WindowModalDialog):
 
         label = self._label_dialog(msg)
         if label is None:
-            self.window.show_message(_("Operation cancelled."))
+            self.window.show_message(_('Operation cancelled.'))
             return
 
         try:
             (response, sw1, sw2) = client.cc.card_set_label(label)
             if sw1 == 0x90 and sw2 == 0x00:
-                self.window.show_message(_("Card label changed successfully!"))
+                self.window.show_message(_('Card label changed successfully!'))
                 self.thread.add(
                     self._fetch_card_info,
                     on_success=self.show_values,
@@ -1087,25 +996,25 @@ class SatochipSettingsDialog(WindowModalDialog):
                 )
             elif sw1 == 0x6D and sw2 == 0x00:
                 self.window.show_error(
-                    _("This card does not support labels (requires v0.12+).")
+                    _('This card does not support labels (requires v0.12+).')
                 )
             else:
                 self.window.show_error(
-                    _("Failed to change the card label. Please try again.")
+                    _('Failed to change the card label. Please try again.')
                 )
         except Exception as ex:
             self.window.show_error(
-                _("Failed to change label: {}").format(str(ex))
+                _('Failed to change label: {}').format(str(ex))
             )
 
     def _apply_schnorr_policy(self):
         policy = self.schnorr_combo.currentData()
 
         if not self.window.question(
-            _("Change Schnorr signature policy on this card?")
-            + "\n\n"
-            + _("This affects all wallets using this card."),
-            title=_("Confirm"),
+            _('Change Schnorr signature policy on this card?')
+            + '\n\n'
+            + _('This affects all wallets using this card.'),
+            title=_('Confirm'),
         ):
             return
 
@@ -1117,7 +1026,7 @@ class SatochipSettingsDialog(WindowModalDialog):
                 )
                 if sw1 == 0x90 and sw2 == 0x00:
                     self.window.show_message(
-                        _("Schnorr policy updated successfully!")
+                        _('Schnorr policy updated successfully!')
                     )
                     self.thread.add(
                         self._fetch_card_info,
@@ -1126,20 +1035,20 @@ class SatochipSettingsDialog(WindowModalDialog):
                     )
                 elif sw1 == 0x6D and sw2 == 0x00:
                     self.window.show_error(
-                        _("This card does not support feature policies.")
+                        _('This card does not support feature policies.')
                     )
                 else:
                     self.window.show_error(
                         _(
-                            "Failed to update Schnorr policy "
-                            "(SW: {:02X}{:02X})"
+                            'Failed to update Schnorr policy '
+                            '(SW: {:02X}{:02X})'
                         ).format(
                             sw1, sw2
                         )
                     )
             except Exception as ex:
                 self.window.show_error(
-                    _("Failed to update Schnorr policy: {}").format(str(ex))
+                    _('Failed to update Schnorr policy: {}').format(str(ex))
                 )
 
         self.thread.add(self._fetch_client, on_success=do_apply)
@@ -1148,13 +1057,13 @@ class SatochipSettingsDialog(WindowModalDialog):
         policy = self.nfc_combo.currentData()
 
         if not self.window.question(
-            _("Change NFC contactless policy on this card?")
-            + "\n\n"
+            _('Change NFC contactless policy on this card?')
+            + '\n\n'
             + _(
-                "If you disable NFC, you will need "
-                "a contact reader to re-enable it."
+                'If you disable NFC, you will need '
+                'a contact reader to re-enable it.'
             ),
-            title=_("Confirm"),
+            title=_('Confirm'),
         ):
             return
 
@@ -1164,7 +1073,7 @@ class SatochipSettingsDialog(WindowModalDialog):
                 (resp, sw1, sw2) = client.cc.card_set_nfc_policy(policy)
                 if sw1 == 0x90 and sw2 == 0x00:
                     self.window.show_message(
-                        _("NFC policy updated successfully!")
+                        _('NFC policy updated successfully!')
                     )
                     self.thread.add(
                         self._fetch_card_info,
@@ -1173,20 +1082,20 @@ class SatochipSettingsDialog(WindowModalDialog):
                     )
                 elif sw1 == 0x6D and sw2 == 0x00:
                     self.window.show_error(
-                        _("This card does not support NFC policy settings.")
+                        _('This card does not support NFC policy settings.')
                     )
                 else:
                     self.window.show_error(
                         _(
-                            "Failed to update NFC policy "
-                            "(SW: {:02X}{:02X})"
+                            'Failed to update NFC policy '
+                            '(SW: {:02X}{:02X})'
                         ).format(
                             sw1, sw2
                         )
                     )
             except Exception as ex:
                 self.window.show_error(
-                    _("Failed to update NFC policy: {}").format(str(ex))
+                    _('Failed to update NFC policy: {}').format(str(ex))
                 )
 
         self.thread.add(self._fetch_client, on_success=do_apply)
@@ -1199,12 +1108,12 @@ class SatochipSettingsDialog(WindowModalDialog):
         wallet = self.window.wallet
         balance_sats = sum(wallet.get_balance()) if wallet else 0
 
-        confirm_phrase = "WIPE"
+        confirm_phrase = 'WIPE'
         try:
             (_r1, _r2, _r3, lbl) = client.cc.card_get_label()
             if lbl and lbl.strip() and lbl.strip() not in (
-                "(none)",
-                "(unknown)",
+                '(none)',
+                '(unknown)',
             ):
                 confirm_phrase = lbl.strip()
         except Exception:
@@ -1212,27 +1121,27 @@ class SatochipSettingsDialog(WindowModalDialog):
 
         warnings = [
             _(
-                "The seed phrase stored on the card "
-                "will be permanently erased."
+                'The seed phrase stored on the card '
+                'will be permanently erased.'
             ),
-            _("The PIN, card label, and all stored data will be deleted."),
-            _("The card will be returned to factory state."),
-            _("This action is irreversible."),
+            _('The PIN, card label, and all stored data will be deleted.'),
+            _('The card will be returned to factory state.'),
+            _('This action is irreversible.'),
         ]
 
         balance_warning = None
         if balance_sats > 0:
             balance_warning = _(
-                "Electrum shows this wallet has a balance of {bal}. "
-                "Make sure you have a backup of your seed phrase before "
-                "continuing — after wipe, the only way to recover the "
-                "funds is to restore the seed into a new wallet."
+                'Electrum shows this wallet has a balance of {bal}. '
+                'Make sure you have a backup of your seed phrase before '
+                'continuing — after wipe, the only way to recover the '
+                'funds is to restore the seed into a new wallet.'
             ).format(bal=self.window.format_amount_and_units(balance_sats))
 
         confirmed = TypedConfirmationDialog(
             parent=self,
-            title=_("Wipe Satochip"),
-            action_label=_("Wipe Card"),
+            title=_('Wipe Satochip'),
+            action_label=_('Wipe Card'),
             confirm_phrase=confirm_phrase,
             warnings=warnings,
             balance_warning=balance_warning,
@@ -1251,23 +1160,18 @@ class SatochipSettingsDialog(WindowModalDialog):
         threading.Thread(target=reset_task, daemon=True).start()
 
 
-# ===================================================================
-# Wizard Components
-# ===================================================================
-
-
 class WCSatochipBlocked(WalletWizardComponent):
     """Wizard page for when the Satochip is PIN-locked;
     offers wipe-and-recover flow."""
 
-    validChanged = pyqtSignal([bool], arguments=["valid"])
+    validChanged = pyqtSignal([bool], arguments=['valid'])
 
     def __init__(self, parent, wizard):
         super().__init__(parent, wizard)
-        self.title = _("Satochip Is Locked")
+        self.title = _('Satochip Is Locked')
         self.validChanged.connect(self._on_valid_changed)
         self.plugins = wizard.plugins
-        self.plugin = self.plugins.get_plugin("satochip")
+        self.plugin = self.plugins.get_plugin('satochip')
         self._reset_btn = None
 
     def _on_valid_changed(self, valid):
@@ -1276,28 +1180,28 @@ class WCSatochipBlocked(WalletWizardComponent):
     def on_ready(self):
         msg = WWLabel(
             _(
-                "The Satochip is locked due to "
-                "too many incorrect PIN attempts."
+                'The Satochip is locked due to '
+                'too many incorrect PIN attempts.'
             )
         )
         self.layout().addWidget(msg)
 
         puk_note = WWLabel(
             _(
-                "If you have the PUK code that was set during card "
-                "initialization, you can use it to unblock the PIN "
-                "without losing data. Otherwise, you can wipe the "
-                "card to start over — this will permanently erase "
-                "all data."
+                'If you have the PUK code that was set during card '
+                'initialization, you can use it to unblock the PIN '
+                'without losing data. Otherwise, you can wipe the '
+                'card to start over — this will permanently erase '
+                'all data.'
             )
         )
         puk_note.setStyleSheet(ColorScheme.GRAY.as_stylesheet())
         self.layout().addWidget(puk_note)
 
-        self._reset_btn = QPushButton(_("Wipe Card"))
+        self._reset_btn = QPushButton(_('Wipe Card'))
         self._reset_btn.setStyleSheet(
-            "QPushButton {{ background-color: {red}; color: white; "
-            "font-weight: bold; padding: 8px 16px; }}".format(
+            'QPushButton {{ background-color: {red}; color: white; '
+            'font-weight: bold; padding: 8px 16px; }}'.format(
                 red=ColorScheme.RED.as_color().name()
             )
         )
@@ -1310,9 +1214,9 @@ class WCSatochipBlocked(WalletWizardComponent):
     def _on_factory_reset(self):
         self.busy = True
         self._reset_btn.setEnabled(False)
-        self._reset_btn.setText(_("Wiping..."))
+        self._reset_btn.setText(_('Wiping...'))
 
-        _name, _info = self.wizard_data["hardware_device"]
+        _name, _info = self.wizard_data['hardware_device']
         device_id = _info.device.id_
         client = self.plugins.device_manager.client_by_id(
             device_id, scan_now=False
@@ -1320,12 +1224,12 @@ class WCSatochipBlocked(WalletWizardComponent):
 
         def show_message(msg):
             QTimer.singleShot(
-                0, lambda: self._reset_btn.setText(_("Wipe Complete"))
+                0, lambda: self._reset_btn.setText(_('Wipe Complete'))
             )
 
         def show_error(msg):
             QTimer.singleShot(0, lambda: setattr(self, 'error', msg))
-            _logger.error("Wipe failed: %s", msg)
+            _logger.error('Wipe failed: %s', msg)
 
         def reset_task():
             try:
@@ -1353,40 +1257,40 @@ class WCSatochipWrongCard(WalletWizardComponent):
 
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(
-            self, parent, wizard, title=_("Card Mismatch")
+            self, parent, wizard, title=_('Card Mismatch')
         )
         self._busy = False
 
     def on_ready(self):
-        _name, _info = self.wizard_data["hardware_device"]
-        device_label = _info.label if _info else _("Unknown")
+        _name, _info = self.wizard_data['hardware_device']
+        device_label = _info.label if _info else _('Unknown')
 
         msg = WWLabel(
-            "".join(
+            ''.join(
                 [
-                    _("This Satochip cannot be used with this wallet.\n\n"),
+                    _('This Satochip cannot be used with this wallet.\n\n'),
                     _(
-                        "The card ({}) does not contain "
-                        "the seed that was used to "
-                        "create this wallet.\n\n"
+                        'The card ({}) does not contain '
+                        'the seed that was used to '
+                        'create this wallet.\n\n'
                     ).format(device_label),
                     _(
-                        "To use a Satochip with an existing wallet, "
-                        "the card must already have the SAME seed "
-                        "that created the wallet.\n\n"
+                        'To use a Satochip with an existing wallet, '
+                        'the card must already have the SAME seed '
+                        'that created the wallet.\n\n'
                     ),
-                    _("Options:\n"),
+                    _('Options:\n'),
                     _(
-                        "  \u2022 Use a different Satochip that "
+                        '  \u2022 Use a different Satochip that '
                         "contains the wallet's seed\n"
                     ),
                     _(
-                        "  \u2022 Use Satochip-Utils to import "
-                        "the correct seed onto this card\n"
+                        '  \u2022 Use Satochip-Utils to import '
+                        'the correct seed onto this card\n'
                     ),
                     _(
-                        "  \u2022 Create a new wallet "
-                        "with this card instead\n\n"
+                        '  \u2022 Create a new wallet '
+                        'with this card instead\n\n'
                     ),
                     _("Click 'Back' to choose a different device."),
                 ]
@@ -1400,44 +1304,43 @@ class WCSatochipWrongCard(WalletWizardComponent):
         pass
 
 
-class WCSatochipRecoverSetup(WalletWizardComponent):
-    """Wizard page for setting up PIN on a factory-fresh Satochip for
-    existing wallet recovery."""
+class WCSatochipRecoverSetup(WalletWizardComponent, Logger):
 
-    validChanged = pyqtSignal([bool], arguments=["valid"])
+    validChanged = pyqtSignal([bool], arguments=['valid'])
 
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(
             self, parent, wizard,
-            title=_("Set Up Satochip for Existing Wallet"),
+            title=_('Set Up Satochip for Existing Wallet'),
         )
+        Logger.__init__(self)
         self._busy = False
         self.plugins = wizard.plugins
-        self.plugin = self.plugins.get_plugin("satochip")
+        self.plugin = self.plugins.get_plugin('satochip')
         self.validChanged.connect(self._on_valid_changed)
 
     def _on_valid_changed(self, valid):
         self.valid = valid
 
     def on_ready(self):
-        _name, _info = self.wizard_data["hardware_device"]
-        device_label = _info.label if _info else _("Unknown")
+        _name, _info = self.wizard_data['hardware_device']
+        device_label = _info.label if _info else _('Unknown')
 
         msg = WWLabel(
-            "".join(
+            ''.join(
                 [
-                    _("This Satochip ({}) is not yet initialized.\n\n").format(
+                    _('This Satochip ({}) is not yet initialized.\n\n').format(
                         device_label
                     ),
                     _(
-                        "To use this card with your existing wallet, "
-                        "you must first set a PIN, then import "
-                        "the seed phrase that was used to create "
-                        "this wallet.\n\n"
+                        'To use this card with your existing wallet, '
+                        'you must first set a PIN, then import '
+                        'the seed phrase that was used to create '
+                        'this wallet.\n\n'
                     ),
                     _(
-                        "Enter a new PIN for this card below "
-                        "(4-16 characters).\n"
+                        'Enter a new PIN for this card below '
+                        '(4-16 characters).\n'
                     ),
                 ]
             )
@@ -1446,12 +1349,12 @@ class WCSatochipRecoverSetup(WalletWizardComponent):
 
         self.pw = PasswordLineEdit()
         self.pw.setMinimumWidth(32)
-        self.layout().addWidget(WWLabel(_("Enter new PIN:")))
+        self.layout().addWidget(WWLabel(_('Enter new PIN:')))
         self.layout().addWidget(self.pw)
 
         self.pw2 = PasswordLineEdit()
         self.pw2.setMinimumWidth(32)
-        self.layout().addWidget(WWLabel(_("Confirm new PIN:")))
+        self.layout().addWidget(WWLabel(_('Confirm new PIN:')))
         self.layout().addWidget(self.pw2)
 
         self.layout().addStretch(1)
@@ -1460,10 +1363,10 @@ class WCSatochipRecoverSetup(WalletWizardComponent):
             is_valid = True
             if self.pw.text() != self.pw2.text():
                 is_valid = False
-            pw_bytes = self.pw.text().encode("utf-8")
+            pw_bytes = self.pw.text().encode('utf-8')
             if len(pw_bytes) < 4 or len(pw_bytes) > 16:
                 is_valid = False
-            pw2_bytes = self.pw2.text().encode("utf-8")
+            pw2_bytes = self.pw2.text().encode('utf-8')
             if len(pw2_bytes) < 4 or len(pw2_bytes) > 16:
                 is_valid = False
             self.valid = is_valid
@@ -1474,7 +1377,7 @@ class WCSatochipRecoverSetup(WalletWizardComponent):
     def apply(self):
         self.busy = True
         pin = self.pw.text()
-        _name, _info = self.wizard_data["hardware_device"]
+        _name, _info = self.wizard_data['hardware_device']
         device_id = _info.device.id_
 
         client = self.plugins.device_manager.client_by_id(
@@ -1485,35 +1388,32 @@ class WCSatochipRecoverSetup(WalletWizardComponent):
         def setup_task():
             try:
                 self.plugin._setup_device(pin, device_id, client)
-                _logger.info("[WCSatochipRecoverSetup] Card setup completed")
+                _logger.info('[WCSatochipRecoverSetup] Card setup completed')
                 self.validChanged.emit(True)
             except Exception as e:
-                _logger.exception(
-                    "[WCSatochipRecoverSetup] Failed to set up card"
-                )
-                self.error = str(e)
+                self.logger.exception('Failed to set up card')
+                _set_error_later(self, str(e))
                 self.validChanged.emit(False)
             finally:
-                self.busy = False
+                _set_busy_later(self, False)
 
         t = threading.Thread(target=setup_task, daemon=True)
         t.start()
 
 
-class WCSatochipRecoverSeed(WalletWizardComponent):
-    """Wizard page for recovering an existing wallet by importing the seed
-    onto an unseeded Satochip."""
+class WCSatochipRecoverSeed(WalletWizardComponent, Logger):
 
-    validChanged = pyqtSignal([bool], arguments=["valid"])
+    validChanged = pyqtSignal([bool], arguments=['valid'])
 
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(
-            self, parent, wizard, title=_("Import Seed for Existing Wallet")
+            self, parent, wizard, title=_('Import Seed for Existing Wallet')
         )
+        Logger.__init__(self)
         self._busy = False
         self._seed_widget = None
         self.plugins = wizard.plugins
-        self.plugin = self.plugins.get_plugin("satochip")
+        self.plugin = self.plugins.get_plugin('satochip')
         self.validChanged.connect(self._on_valid_changed)
 
     def _on_valid_changed(self, valid):
@@ -1523,30 +1423,30 @@ class WCSatochipRecoverSeed(WalletWizardComponent):
         from electrum.gui.qt.seed_dialog import SeedWidget
         from electrum.keystore import bip39_is_checksum_valid
 
-        _name, _info = self.wizard_data["hardware_device"]
-        device_label = _info.label if _info else _("Unknown")
+        _name, _info = self.wizard_data['hardware_device']
+        device_label = _info.label if _info else _('Unknown')
 
         msg = WWLabel(
-            "".join(
+            ''.join(
                 [
                     _(
-                        "This Satochip ({}) "
-                        "is not yet seeded.\n\n"
+                        'This Satochip ({}) '
+                        'is not yet seeded.\n\n'
                     ).format(device_label),
                     _(
-                        "To use this card with your existing wallet, "
-                        "you must import "
-                        "the seed phrase that was used to create "
-                        "this wallet.\n\n"
+                        'To use this card with your existing wallet, '
+                        'you must import '
+                        'the seed phrase that was used to create '
+                        'this wallet.\n\n'
                     ),
                     _(
-                        "Enter your BIP39 seed phrase below. "
-                        "It must be the SAME seed "
-                        "that was used to create this wallet.\n\n"
+                        'Enter your BIP39 seed phrase below. '
+                        'It must be the SAME seed '
+                        'that was used to create this wallet.\n\n'
                     ),
                     _(
-                        "If you enter the wrong seed, "
-                        "the wallet will not open correctly.\n"
+                        'If you enter the wrong seed, '
+                        'the wallet will not open correctly.\n'
                     ),
                 ]
             )
@@ -1561,7 +1461,7 @@ class WCSatochipRecoverSeed(WalletWizardComponent):
 
         self._seed_widget = SeedWidget(
             is_seed=_is_valid_bip39_seed,
-            options=["ext", "bip39"],
+            options=['ext', 'bip39'],
             config=self.wizard.config,
         )
 
@@ -1579,36 +1479,34 @@ class WCSatochipRecoverSeed(WalletWizardComponent):
             return
 
         seed = self._seed_widget.get_seed()
-        passphrase = self.wizard_data.get("seed_extra_words", "")
+        passphrase = self.wizard_data.get('seed_extra_words', '')
 
         cosigner_data = self.wizard.current_cosigner(self.wizard_data)
-        cosigner_data["seed"] = seed
-        cosigner_data["seed_variant"] = "bip39"
-        cosigner_data["seed_type"] = "bip39"
-        cosigner_data["seed_extend"] = bool(passphrase)
-        cosigner_data["seed_extra_words"] = passphrase
+        cosigner_data['seed'] = seed
+        cosigner_data['seed_variant'] = 'bip39'
+        cosigner_data['seed_type'] = 'bip39'
+        cosigner_data['seed_extend'] = bool(passphrase)
+        cosigner_data['seed_extra_words'] = passphrase
 
-        _name, _info = self.wizard_data["hardware_device"]
+        _name, _info = self.wizard_data['hardware_device']
         device_id = _info.device.id_
 
-        settings = ("bip39", seed, passphrase)
+        settings = ('bip39', seed, passphrase)
         handler = self.plugin.create_handler(self.wizard)
 
         def import_task():
             try:
                 self.plugin._import_seed(settings, device_id, handler)
                 _logger.info(
-                    "[WCSatochipRecoverSeed] Seed imported successfully"
+                    '[WCSatochipRecoverSeed] Seed imported successfully'
                 )
                 self.validChanged.emit(True)
             except Exception as e:
-                _logger.exception(
-                    "[WCSatochipRecoverSeed] Failed to import seed"
-                )
-                self.error = str(e)
+                self.logger.exception('Failed to import seed')
+                _set_error_later(self, str(e))
                 self.validChanged.emit(False)
             finally:
-                self.busy = False
+                _set_busy_later(self, False)
 
         t = threading.Thread(target=import_task, daemon=True)
         t.start()
@@ -1625,13 +1523,13 @@ class WCSatochipUnlock(WCHWUnlock):
         self._navigate_to.connect(self._do_navigate)
 
     def _do_navigate(self, view_key):
-        """Navigate to a named page (called via signal for GUI thread)."""
+        '''Navigate to a named page (called via signal for GUI thread).'''
         self.wizard.load_next_component(view_key, self.wizard_data)
 
     def on_ready(self):
-        _name, _info = self.wizard_data["hardware_device"]
+        _name, _info = self.wizard_data['hardware_device']
         self.plugin = self.plugins.get_plugin(_info.plugin_name)
-        self.title = _("Unlocking {} ({})").format(
+        self.title = _('Unlocking {} ({})').format(
             _info.model_name, _info.label
         )
 
@@ -1640,7 +1538,7 @@ class WCSatochipUnlock(WCHWUnlock):
             device_id, scan_now=False
         )
         if client is None:
-            self.error = _("The device was disconnected.")
+            self.error = _('The device was disconnected.')
             self.busy = False
             self.validate()
             return
@@ -1652,27 +1550,22 @@ class WCSatochipUnlock(WCHWUnlock):
             except Exception as e:
                 from electrum.plugins.satochip.exceptions import WrongCardError
                 if isinstance(e, WrongCardError):
-                    self.busy = False
-                    self._navigate_to.emit("satochip_wrong_card")
+                    _set_busy_later(self, False)
+                    self._navigate_to.emit('satochip_wrong_card')
                     return
-                self.error = str(e)
+                _set_error_later(self, str(e))
                 self.logger.exception(str(e))
-            self.busy = False
+            _set_busy_later(self, False)
             self.validate()
 
         t = threading.Thread(target=unlock_task, args=(client,), daemon=True)
         t.start()
 
 
-# ===================================================================
-# Setup PIN / Seed wizard components
-# ===================================================================
-
-
 class SatochipSetupLayout(QVBoxLayout):
-    """PIN and label setup for a new Satochip card."""
+    '''PIN and label setup for a new Satochip card.'''
 
-    validChanged = pyqtSignal([bool], arguments=["valid"])
+    validChanged = pyqtSignal([bool], arguments=['valid'])
 
     def __init__(self, device):
         QVBoxLayout.__init__(self)
@@ -1680,44 +1573,44 @@ class SatochipSetupLayout(QVBoxLayout):
         vbox = QVBoxLayout()
         msg_setup = WWLabel(
             _(
-                "Please take a moment to set up your Satochip. "
-                "This must be done only once."
+                'Please take a moment to set up your Satochip. '
+                'This must be done only once.'
             )
         )
         vbox.addWidget(msg_setup)
 
         self.pw = PasswordLineEdit()
         self.pw.setMinimumWidth(32)
-        vbox.addWidget(WWLabel(_("Enter new PIN:")))
+        vbox.addWidget(WWLabel(_('Enter new PIN:')))
         vbox.addWidget(self.pw)
         self.addLayout(vbox)
 
         self.pw2 = PasswordLineEdit()
         self.pw2.setMinimumWidth(32)
         vbox2 = QVBoxLayout()
-        vbox2.addWidget(WWLabel(_("Confirm new PIN:")))
+        vbox2.addWidget(WWLabel(_('Confirm new PIN:')))
         vbox2.addWidget(self.pw2)
         self.addLayout(vbox2)
 
         self.label_edit = QLineEdit()
         self.label_edit.setMaxLength(64)
-        self.label_edit.setPlaceholderText(_("e.g., Savings"))
+        self.label_edit.setPlaceholderText(_('e.g., Savings'))
         vbox3 = QVBoxLayout()
-        vbox3.addWidget(WWLabel(_("Card label (optional):")))
+        vbox3.addWidget(WWLabel(_('Card label (optional):')))
         vbox3.addWidget(self.label_edit)
         self.addLayout(vbox3)
 
-        if self.pw.text() == "" or self.pw.text() is None:
+        if self.pw.text() == '' or self.pw.text() is None:
             self.validChanged.emit(False)
 
         def set_enabled():
             is_valid = True
             if self.pw.text() != self.pw2.text():
                 is_valid = False
-            pw_bytes = self.pw.text().encode("utf-8")
+            pw_bytes = self.pw.text().encode('utf-8')
             if len(pw_bytes) < 4 or len(pw_bytes) > 16:
                 is_valid = False
-            pw2_bytes = self.pw2.text().encode("utf-8")
+            pw2_bytes = self.pw2.text().encode('utf-8')
             if len(pw2_bytes) < 4 or len(pw2_bytes) > 16:
                 is_valid = False
             self.validChanged.emit(is_valid)
@@ -1734,20 +1627,20 @@ class WCSatochipSetupParams(WalletWizardComponent):
 
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(
-            self, parent, wizard, title=_("Satochip Setup")
+            self, parent, wizard, title=_('Satochip Setup')
         )
         self.plugins = wizard.plugins
-        self.plugin = self.plugins.get_plugin("satochip")
+        self.plugin = self.plugins.get_plugin('satochip')
 
         self.layout().addWidget(
-            WWLabel(_("Satochip card setup in progress\u2026"))
+            WWLabel(_('Satochip card setup in progress\u2026'))
         )
 
         self._busy = True
 
     def on_ready(self):
         current_cosigner = self.wizard.current_cosigner(self.wizard_data)
-        _name, _info = current_cosigner["hardware_device"]
+        _name, _info = current_cosigner['hardware_device']
         self.settings_layout = SatochipSetupLayout(_info.device.id_)
         self.settings_layout.validChanged.connect(
             self.on_settings_valid_changed
@@ -1763,30 +1656,31 @@ class WCSatochipSetupParams(WalletWizardComponent):
 
     def apply(self):
         current_cosigner = self.wizard.current_cosigner(self.wizard_data)
-        current_cosigner["satochip_setup_settings"] = (
+        current_cosigner['satochip_setup_settings'] = (
             self.settings_layout.get_settings()
         )
 
 
-class WCSatochipSetup(WalletWizardComponent):
-    validChanged = pyqtSignal([bool], arguments=["valid"])
+class WCSatochipSetup(WalletWizardComponent, Logger):
+    validChanged = pyqtSignal([bool], arguments=['valid'])
 
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(
-            self, parent, wizard, title=_("Satochip Setup")
+            self, parent, wizard, title=_('Satochip Setup')
         )
+        Logger.__init__(self)
         self.plugins = wizard.plugins
-        self.plugin = self.plugins.get_plugin("satochip")
+        self.plugin = self.plugins.get_plugin('satochip')
         self.validChanged.connect(self._on_valid_changed)
 
-        self.layout().addWidget(WWLabel(_("Setting up card\u2026")))
+        self.layout().addWidget(WWLabel(_('Setting up card\u2026')))
 
         self._busy = True
 
     def on_ready(self):
         current_cosigner = self.wizard.current_cosigner(self.wizard_data)
-        settings = current_cosigner["satochip_setup_settings"]
-        _name, _info = current_cosigner["hardware_device"]
+        settings = current_cosigner['satochip_setup_settings']
+        _name, _info = current_cosigner['hardware_device']
         device_id = _info.device.id_
 
         client = self.plugins.device_manager.client_by_id(
@@ -1797,15 +1691,15 @@ class WCSatochipSetup(WalletWizardComponent):
         def initialize_device_task(settings, device_id, client):
             try:
                 self.plugin._setup_device(settings, device_id, client)
-                _logger.info("[WCSatochipSetup] Done initialize device")
+                _logger.info('[WCSatochipSetup] Done initialize device')
                 self.validChanged.emit(True)
                 self.wizard.requestNext.emit()
             except Exception as e:
                 self.validChanged.emit(False)
-                self.error = str(e)
-                _logger.exception(str(e))
+                _set_error_later(self, str(e))
+                self.logger.exception(str(e))
             finally:
-                self.busy = False
+                _set_busy_later(self, False)
 
         t = threading.Thread(
             target=initialize_device_task,
@@ -1824,48 +1718,35 @@ class WCSatochipSetup(WalletWizardComponent):
 class WCSeedMethodChoice(WalletWizardComponent):
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(
-            self, parent, wizard, title=_("Satochip Needs a Seed")
+            self, parent, wizard, title=_('Satochip Needs a Seed')
         )
 
-        intro = WWLabel("\n".join(MSG_SEED_IMPORT))
+        intro = WWLabel('\n'.join(MSG_SEED_IMPORT))
         self.layout().addWidget(intro)
 
         message = _(
-            "How do you want to provide a seed for this Satochip card?"
+            'How do you want to provide a seed for this Satochip card?'
         )
         choices = [
-            ChoiceItem(key="import", label=_("I already have a seed phrase")),
+            ChoiceItem(key='import', label=_('I already have a seed phrase')),
             ChoiceItem(
-                key="generate",
-                label=_("Generate a new BIP39 seed phrase"),
+                key='generate',
+                label=_('Generate a new BIP39 seed phrase'),
             ),
         ]
-        if ChoiceWidget is not None:
-            self.choice_w = ChoiceWidget(
-                message=message, choices=choices, default_key="import"
-            )
-            self.layout().addWidget(self.choice_w)
-        else:
-            combo = QComboBox()
-            for c in choices:
-                combo.addItem(c.label, c.key)
-            combo.setCurrentIndex(0)
-            self._combo = combo
-            self.layout().addWidget(QLabel(message))
-            self.layout().addWidget(combo)
+        self.choice_w = ChoiceWidget(
+            message=message, choices=choices, default_key='import'
+        )
+        self.layout().addWidget(self.choice_w)
         self.layout().addStretch(1)
 
         self.valid = True
 
     def apply(self):
-        if ChoiceWidget is not None:
-            self.wizard_data[
-                "satochip_seed_method"
-            ] = self.choice_w.selected_key
-        else:
-            self.wizard_data[
-                "satochip_seed_method"
-            ] = self._combo.currentData()
+        cosigner_data = self.wizard.current_cosigner(self.wizard_data)
+        cosigner_data[
+            'satochip_seed_method'
+        ] = self.choice_w.selected_key
 
 
 class WCSatochipGenerateSeed(WalletWizardComponent):
@@ -1874,21 +1755,21 @@ class WCSatochipGenerateSeed(WalletWizardComponent):
 
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(
-            self, parent, wizard, title=_("Your New BIP39 Seed Phrase")
+            self, parent, wizard, title=_('Your New BIP39 Seed Phrase')
         )
         self._seed = None
         self.seed_widget = None
 
         length_layout = QHBoxLayout()
-        length_layout.addWidget(QLabel(_("Seed length:")))
-        self.radio_12 = QRadioButton(_("12 words"))
-        self.radio_24 = QRadioButton(_("24 words"))
+        length_layout.addWidget(QLabel(_('Seed length:')))
+        self.radio_12 = QRadioButton(_('12 words'))
+        self.radio_24 = QRadioButton(_('24 words'))
         self.radio_24.setChecked(True)
         self.radio_12.toggled.connect(self._on_length_changed)
         self.radio_24.toggled.connect(self._on_length_changed)
         length_layout.addWidget(self.radio_12)
         length_layout.addWidget(self.radio_24)
-        self.regen_btn = QPushButton(_("Regenerate"))
+        self.regen_btn = QPushButton(_('Regenerate'))
         self.regen_btn.clicked.connect(self._on_regenerate_clicked)
         length_layout.addWidget(self.regen_btn)
         length_layout.addStretch(1)
@@ -1909,9 +1790,9 @@ class WCSatochipGenerateSeed(WalletWizardComponent):
         from electrum.gui.qt.seed_dialog import SeedWidget
 
         self.seed_widget = SeedWidget(
-            title=_("Your wallet generation seed is:"),
+            title=_('Your wallet generation seed is:'),
             seed=self._seed,
-            options=["ext", "bip39"],
+            options=['ext', 'bip39'],
             msg=True,
             parent=self,
             config=self.wizard.config,
@@ -1936,10 +1817,10 @@ class WCSatochipGenerateSeed(WalletWizardComponent):
 
     def apply(self):
         cosigner_data = self.wizard.current_cosigner(self.wizard_data)
-        cosigner_data["seed"] = self._seed
-        cosigner_data["seed_type"] = "bip39"
-        cosigner_data["seed_variant"] = "bip39"
-        cosigner_data["seed_extend"] = bool(
+        cosigner_data['seed'] = self._seed
+        cosigner_data['seed_type'] = 'bip39'
+        cosigner_data['seed_variant'] = 'bip39'
+        cosigner_data['seed_extend'] = bool(
             self.seed_widget and self.seed_widget.is_ext
         )
 
@@ -1947,18 +1828,18 @@ class WCSatochipGenerateSeed(WalletWizardComponent):
 class WCSeedSuccess(WalletWizardComponent):
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(
-            self, parent, wizard, title=_("Seed Imported")
+            self, parent, wizard, title=_('Seed Imported')
         )
 
     def on_ready(self):
         w_icon = QLabel()
         w_icon.setPixmap(
-            QPixmap(icon_path("confirmed.png")).scaledToWidth(
+            QPixmap(icon_path('confirmed.png')).scaledToWidth(
                 48, mode=Qt.TransformationMode.SmoothTransformation
             )
         )
         w_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label = WWLabel(_("Seed imported successfully!"))
+        label = WWLabel(_('Seed imported successfully!'))
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout().addStretch(1)
         self.layout().addWidget(w_icon)
@@ -1971,18 +1852,19 @@ class WCSeedSuccess(WalletWizardComponent):
         pass
 
 
-class WCSatochipImportSeed(WalletWizardComponent):
-    validChanged = pyqtSignal([bool], arguments=["valid"])
+class WCSatochipImportSeed(WalletWizardComponent, Logger):
+    validChanged = pyqtSignal([bool], arguments=['valid'])
 
     def __init__(self, parent, wizard):
         WalletWizardComponent.__init__(
-            self, parent, wizard, title=_("Satochip Setup")
+            self, parent, wizard, title=_('Satochip Setup')
         )
+        Logger.__init__(self)
         self.plugins = wizard.plugins
-        self.plugin = self.plugins.get_plugin("satochip")
+        self.plugin = self.plugins.get_plugin('satochip')
         self.validChanged.connect(self._on_valid_changed)
 
-        self.layout().addWidget(WWLabel(_("Importing seed\u2026")))
+        self.layout().addWidget(WWLabel(_('Importing seed\u2026')))
 
         self._busy = True
 
@@ -1990,14 +1872,14 @@ class WCSatochipImportSeed(WalletWizardComponent):
         current_cosigner = self.wizard.current_cosigner(self.wizard_data)
 
         settings = (
-            current_cosigner["seed_type"],
-            current_cosigner["seed"],
-            current_cosigner["seed_extra_words"]
-            if current_cosigner.get("seed_extend")
-            else "",
+            current_cosigner['seed_type'],
+            current_cosigner['seed'],
+            current_cosigner['seed_extra_words']
+            if current_cosigner.get('seed_extend')
+            else '',
         )
 
-        _name, _info = current_cosigner["hardware_device"]
+        _name, _info = current_cosigner['hardware_device']
         device_id = _info.device.id_
         client = self.plugins.device_manager.client_by_id(
             device_id, scan_now=False
@@ -2007,15 +1889,15 @@ class WCSatochipImportSeed(WalletWizardComponent):
         def initialize_device_task(settings, device_id, handler):
             try:
                 self.plugin._import_seed(settings, device_id, handler)
-                _logger.info("[WCSatochipImportSeed] Done initialize device")
+                _logger.info('[WCSatochipImportSeed] Done initialize device')
                 self.validChanged.emit(True)
                 self.wizard.requestNext.emit()
             except Exception as e:
                 self.validChanged.emit(False)
-                self.error = str(e)
-                _logger.exception(str(e))
+                _set_error_later(self, str(e))
+                self.logger.exception(str(e))
             finally:
-                self.busy = False
+                _set_busy_later(self, False)
 
         t = threading.Thread(
             target=initialize_device_task,
@@ -2029,11 +1911,6 @@ class WCSatochipImportSeed(WalletWizardComponent):
 
     def _on_valid_changed(self, valid):
         self.valid = valid
-
-
-# ===================================================================
-# Helpers
-# ===================================================================
 
 
 def _run_card_swap_dialog(parent, remaining_steps, total_steps):
@@ -2066,7 +1943,7 @@ def _perform_factory_reset(parent, client, show_message_func, show_error_func):
     for attempt in range(1, max_attempts + 1):
         try:
             client.perform_factory_reset()
-            show_message_func(_("Card wiped successfully."))
+            show_message_func(_('Card wiped successfully.'))
             return
         except FactoryResetAlreadyDone as ex:
             show_message_func(str(ex))
@@ -2075,20 +1952,20 @@ def _perform_factory_reset(parent, client, show_message_func, show_error_func):
             remaining = ex.remaining_steps
             total = remaining + attempt
             if not _run_card_swap_dialog(parent, remaining, total):
-                show_message_func(_("Wipe cancelled."))
+                show_message_func(_('Wipe cancelled.'))
                 return
             continue
         except FactoryResetCardNotRemoved:
             remaining = 4
             total = remaining + attempt
             if not _run_card_swap_dialog(parent, remaining, total):
-                show_message_func(_("Wipe cancelled."))
+                show_message_func(_('Wipe cancelled.'))
                 return
             continue
         except Exception as ex:
-            show_error_func(_("Wipe failed: {}").format(str(ex)))
+            show_error_func(_('Wipe failed: {}').format(str(ex)))
             return
-    show_error_func(_("Wipe failed after {} attempts.").format(max_attempts))
+    show_error_func(_('Wipe failed after {} attempts.').format(max_attempts))
 
 
 def _generate_bip39_mnemonic(num_words: int) -> str:
@@ -2102,7 +1979,7 @@ def _generate_bip39_mnemonic(num_words: int) -> str:
     *num_words* must be 12 (128-bit entropy) or 24 (256-bit entropy).
     """
     assert num_words in (12, 24), (
-        f"num_words must be 12 or 24, got {num_words}"
+        f'num_words must be 12 or 24, got {num_words}'
     )
 
     entropy_bits = 128 if num_words == 12 else 256
@@ -2114,15 +1991,15 @@ def _generate_bip39_mnemonic(num_words: int) -> str:
     checksum = digest[0] >> (8 - checksum_bits)
 
     # Pack entropy + checksum into one big integer
-    entropy_int = int.from_bytes(entropy_bytes, "big")
+    entropy_int = int.from_bytes(entropy_bytes, 'big')
     combined = (entropy_int << checksum_bits) | checksum
 
     # Split into 11-bit groups and look up words
     from electrum.mnemonic import Wordlist
 
-    wordlist = Wordlist.from_file("english.txt")
+    wordlist = Wordlist.from_file('english.txt')
     words = [
         wordlist[(combined >> (11 * i)) & 0x7FF]
         for i in range(num_words - 1, -1, -1)
     ]
-    return " ".join(words)
+    return ' '.join(words)

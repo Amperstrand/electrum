@@ -7,7 +7,7 @@ screenshots.
 
 import os
 import tempfile
-from typing import Any, Optional
+from typing import Optional
 from unittest.mock import MagicMock
 
 from electrum.logging import get_logger
@@ -49,7 +49,8 @@ class RealElectrumContext:
         except Exception:
             pass
         try:
-            self.loop.call_soon_threadsafe(self.loop_stopping_fut.set_result, None)
+            self.loop.call_soon_threadsafe(
+                self.loop_stopping_fut.set_result, None)
             self.loop_thread.join(timeout=5)
         except Exception:
             pass
@@ -118,35 +119,9 @@ class WizardDriver:
             self._wizard = None
 
 
-class MockWizard:
-    def __init__(self, plugins, config):
-        self.plugins = plugins
-        self.config = config
-        self.navmap = {}
-        self._wizard_data: dict = {}
-        self._title = ""
-
-    def current_cosigner(self, wizard_data: dict) -> dict:
-        if "multisig_current_cosigner" in wizard_data:
-            n = str(wizard_data["multisig_current_cosigner"])
-            return wizard_data.get("multisig_cosigner_data", {}).get(n, wizard_data)
-        return wizard_data
-
-    @property
-    def requestNext(self) -> Any:
-        return MagicMock()
-
-    @property
-    def requestPrev(self) -> Any:
-        return MagicMock()
-
-    def set_navmap(self, navmap: dict) -> None:
-        self.navmap = navmap
-
-
-def make_mock_device_info(reader_name: str = "OMNIKEY AG Smart Card Reader USB") -> MagicMock:
+def make_mock_device_info(
+        reader_name="OMNIKEY AG Smart Card Reader USB"):
     device = MagicMock()
-    device.id_ = "test-device-id"
     device.path = reader_name
     device.interface_number = 0
     device.product_key = ("satochip",)
@@ -158,9 +133,3 @@ def make_mock_device_info(reader_name: str = "OMNIKEY AG Smart Card Reader USB")
     info.model_name = "Satochip"
     info.soft_device_id = "test-device-id"
     return info
-
-
-WINDOW_MIN_WIDTH = 1280
-WINDOW_MIN_HEIGHT = 800
-DIALOG_MIN_WIDTH = 800
-DIALOG_MIN_HEIGHT = 600

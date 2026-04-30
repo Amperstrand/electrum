@@ -77,6 +77,10 @@ class SecureChannel:
         return (iv, ciphertext, mac)
 
     def decrypt_secure_channel(self, iv, ciphertext):
+        """Decrypt card response. Note: the Satochip protocol does not
+        include a MAC in card-to-host responses — only host-to-card
+        commands are MAC-authenticated. Response integrity relies on
+        the physical smartcard transport layer."""
         logger.debug("In decrypt_secure_channel()")
         if not self.initialized_secure_channel:
             raise UninitializedSecureChannelError(

@@ -1,4 +1,4 @@
-"""Satochip plugin: keystore, plugin registration, and wizard integration."""
+'''Satochip plugin: keystore, plugin registration, and wizard integration.'''
 
 import time
 from typing import TYPE_CHECKING
@@ -47,8 +47,8 @@ try:
 
     SMARTCARD = True
 except Exception as e:
-    if not (isinstance(e, ModuleNotFoundError) and e.name == "smartcard"):
-        _logger.exception("error importing satochip plugin deps")
+    if not (isinstance(e, ModuleNotFoundError) and e.name == 'smartcard'):
+        _logger.exception('error importing satochip plugin deps')
     SMARTCARD = False
 
 
@@ -68,49 +68,44 @@ class FactoryResetCardNotRemoved(UserFacingException):
 
 def _classify_reader(name: str) -> str:
     n = name.lower()
-    if any(t in n for t in ("nfc", "contactless", "picc")):
-        return "NFC"
-    if any(t in n for t in ("contact", "smart card", "smartcard")):
-        return "Contact"
-    return ""
+    if any(t in n for t in ('nfc', 'contactless', 'picc')):
+        return 'NFC'
+    if any(t in n for t in ('contact', 'smart card', 'smartcard')):
+        return 'Contact'
+    return ''
 
 
 def _reader_brand(reader_name: str) -> str:
-    first = reader_name.strip().split()[0] if reader_name.strip() else ""
-    return first if len(first) <= 12 else ""
+    first = reader_name.strip().split()[0] if reader_name.strip() else ''
+    return first if len(first) <= 12 else ''
 
 
 def _format_transport(reader_name: str) -> str:
     cls = _classify_reader(reader_name)
     brand = _reader_brand(reader_name)
     if brand and cls:
-        return f"{brand} {cls}"
+        return f'{brand} {cls}'
     if cls:
         return cls
     if brand:
         return brand
-    return "smartcard"
+    return 'smartcard'
 
 
-# ---------------------------------------------------------------------------
-# SatochipKeyStore
-# ---------------------------------------------------------------------------
-
-
-class SatochipKeyStore(Hardware_KeyStore):
-    hw_type = "satochip"
-    device = "Satochip"
-    plugin: "SatochipPlugin"
+class Satochip_KeyStore(Hardware_KeyStore):
+    hw_type = 'satochip'
+    device = 'Satochip'
+    plugin: 'SatochipPlugin'
 
     def __init__(self, d):
         super().__init__(d)
         self.ux_busy = False
-        self._satochip_authentikey = d.get("satochip_authentikey", None)
+        self._satochip_authentikey = d.get('satochip_authentikey', None)
         self._expected_device = None
 
     def dump(self):
         d = Hardware_KeyStore.dump(self)
-        d["satochip_authentikey"] = self._satochip_authentikey
+        d['satochip_authentikey'] = self._satochip_authentikey
         return d
 
     def get_client(
@@ -126,7 +121,7 @@ class SatochipKeyStore(Hardware_KeyStore):
             self.verify_connection(client)
         return client
 
-    def verify_connection(self, client: "SatochipClient"):
+    def verify_connection(self, client: 'SatochipClient'):
         expected = self._satochip_authentikey
         if expected is None:
             self.opportunistically_fill_in_missing_info_from_device(client)
@@ -140,15 +135,15 @@ class SatochipKeyStore(Hardware_KeyStore):
             from .exceptions import WrongCardError
             raise WrongCardError(
                 _(
-                    "This card does not match your wallet. "
-                    "Please connect the card that was used to create "
-                    "this wallet."
+                    'This card does not match your wallet. '
+                    'Please connect the card that was used to create '
+                    'this wallet.'
                 )
             )
         self._expected_device = actual
 
     def opportunistically_fill_in_missing_info_from_device(
-        self, client: "SatochipClient"
+        self, client: 'SatochipClient'
     ):
         super().opportunistically_fill_in_missing_info_from_device(client)
         if self._satochip_authentikey is None:
@@ -160,20 +155,20 @@ class SatochipKeyStore(Hardware_KeyStore):
     def decrypt_message(self, sequence, message, password):
         raise UserFacingException(
             _(
-                "Encryption and decryption are not implemented by {}"
+                'Encryption and decryption are not implemented by {}'
             ).format(self.device)
         )
 
     def sign_message(self, sequence, message, password, *, script_type=None):
-        message_byte = message.encode("utf8")
+        message_byte = message.encode('utf8')
         client = self.get_client()
 
-        address_path = self.get_derivation_prefix() + "/%d/%d" % sequence
-        _logger.info(f"sign_message: path={address_path}")
+        address_path = self.get_derivation_prefix() + '/%d/%d' % sequence
+        self.logger.info(f'sign_message: path={address_path}')
 
         with client.run_flow():
             if not client.verify_PIN():
-                return b""
+                return b''
             keynbr = 0xFF
             (depth, bytepath) = _bip32path2bytes(address_path)
             (pubkey, chaincode) = (
@@ -182,8 +177,8 @@ class SatochipKeyStore(Hardware_KeyStore):
             (_r1, _r2, _r3, compsig) = client.cc.card_sign_message(
                 keynbr, pubkey, message_byte
             )
-            if compsig == b"":
-                self.handler.show_error(_("Wrong signature!"))
+            if compsig == b'':
+                self.handler.show_error(_('Wrong signature!'))
             return bytes(compsig)
 
     def sign_transaction(self, tx, password):
@@ -193,7 +188,7 @@ class SatochipKeyStore(Hardware_KeyStore):
         for txin in tx.inputs():
             tx_hash = txin.prevout.txid.hex()
             if txin.utxo is None:
-                raise UserFacingException(_("Missing previous tx."))
+                raise UserFacingException(_('Missing previous tx.'))
             prev_tx[tx_hash] = txin.utxo
         self.plugin.sign_transaction(self, tx, prev_tx)
 
@@ -201,7 +196,7 @@ class SatochipKeyStore(Hardware_KeyStore):
         from electrum import bitcoin
 
         client = self.get_client()
-        address_path = self.get_derivation_prefix() + "/%d/%d" % sequence
+        address_path = self.get_derivation_prefix() + '/%d/%d' % sequence
 
         with client.run_flow():
             if not client.verify_PIN():
@@ -213,31 +208,26 @@ class SatochipKeyStore(Hardware_KeyStore):
             pubkey_hex = pubkey.get_public_key_bytes(compressed=True).hex()
             address = bitcoin.pubkey_to_address(txin_type, pubkey_hex)
             self.handler.show_message(
-                _("Address:") + f" {address}\n"
-                + _("Derivation:") + f" {address_path}"
+                _('Address:') + f' {address}\n'
+                + _('Derivation:') + f' {address_path}'
             )
 
 
-# ---------------------------------------------------------------------------
-# SatochipPlugin
-# ---------------------------------------------------------------------------
-
-
 class SatochipPlugin(HW_PluginBase):
-    keystore_class = SatochipKeyStore
+    keystore_class = Satochip_KeyStore
     minimum_library = (0, 0, 0)
     maximum_library = (3, 0)
     DEVICE_IDS = ((SATOCHIP_VID, SATOCHIP_PID),)
     SUPPORTED_XTYPES = (
-        "standard",
-        "p2wpkh-p2sh",
-        "p2wpkh",
-        "p2wsh-p2sh",
-        "p2wsh",
-        "p2tr",
+        'standard',
+        'p2wpkh-p2sh',
+        'p2wpkh',
+        'p2wsh-p2sh',
+        'p2wsh',
+        'p2tr',
     )
-    firmware_URL = "https://satochip.io"
-    libraries_URL = "https://pypi.org/project/pyscard/"
+    firmware_URL = 'https://satochip.io'
+    libraries_URL = 'https://pypi.org/project/pyscard/'
 
     MIN_TAPROOT_VERSION = 14
 
@@ -253,9 +243,9 @@ class SatochipPlugin(HW_PluginBase):
     def get_library_version(self):
         try:
             from importlib.metadata import version
-            return version("pyscard")
+            return version('pyscard')
         except Exception:
-            return "unknown"
+            return 'unknown'
 
     @runs_in_hwd_thread
     def detect_smartcard_reader(self):
@@ -269,9 +259,9 @@ class SatochipPlugin(HW_PluginBase):
             reader_name = str(reader)
             devices.append(
                 Device(
-                    path=f"/satochip/{idx}",
+                    path=f'/satochip/{idx}',
                     interface_number=idx,
-                    id_=f"/satochip/{idx}",
+                    id_=f'/satochip/{idx}',
                     product_key=(SATOCHIP_VID, SATOCHIP_PID),
                     usage_page=0,
                     transport_ui_string=_format_transport(reader_name),
@@ -285,17 +275,17 @@ class SatochipPlugin(HW_PluginBase):
             return SatochipClient(self, handler, device)
         except CardConnectionException as e:
             raise UserFacingException(
-                _("Could not connect to Satochip card reader: {}").format(e)
+                _('Could not connect to Satochip card reader: {}').format(e)
             )
         except Exception as e:
-            _logger.exception(f"create_client() exception: {e}")
+            self.logger.exception(f'create_client() exception: {e}')
             return None
 
     def get_xpub(self, device_id, derivation, xtype, wizard):
         if xtype not in self.SUPPORTED_XTYPES:
             raise ScriptTypeNotSupported(
                 _(
-                    "This type of script is not supported with {}."
+                    'This type of script is not supported with {}.'
                 ).format(self.device)
             )
         devmgr = self.device_manager()
@@ -330,17 +320,17 @@ class SatochipPlugin(HW_PluginBase):
         devmgr = self.device_manager()
         client = devmgr.client_by_id(device_id)
         if not client:
-            raise Exception(_("The device was disconnected."))
+            raise Exception(_('The device was disconnected.'))
         client.handler = self.create_handler(wizard)
 
         try:
             time.sleep(0.3)
             if not client._ensure_card_connection():
                 raise UserFacingException(
-                    _("Cannot communicate with the card.")
+                    _('Cannot communicate with the card.')
                 )
             (_r1, _r2, _r3, status) = client.cc.card_get_status()
-            if status.get("setup_done"):
+            if status.get('setup_done'):
                 return
         except UserFacingException:
             raise
@@ -356,17 +346,17 @@ class SatochipPlugin(HW_PluginBase):
         if isinstance(settings, tuple):
             pin_str, card_label = settings
         else:
-            pin_str, card_label = settings, ""
+            pin_str, card_label = settings, ''
 
         devmgr = self.device_manager()
         client = devmgr.client_by_id(device_id)
         if not client:
-            raise Exception(_("The device was disconnected."))
+            raise Exception(_('The device was disconnected.'))
 
         with client.run_flow():
             from os import urandom
 
-            pin_0 = list(pin_str.encode("utf-8"))
+            pin_0 = list(pin_str.encode('utf-8'))
             client.cc.set_pin(0, pin_0)
 
             pin_tries_0 = 0x05
@@ -399,7 +389,7 @@ class SatochipPlugin(HW_PluginBase):
             )
             if sw1 != 0x90 or sw2 != 0x00:
                 raise UserFacingException(
-                    _("Failed to set up the card. Please try again.")
+                    _('Failed to set up the card. Please try again.')
                 )
 
             client.verify_PIN()
@@ -408,23 +398,23 @@ class SatochipPlugin(HW_PluginBase):
                 try:
                     client.cc.card_set_label(card_label)
                 except Exception:
-                    _logger.debug("card_set_label failed", exc_info=True)
+                    self.logger.debug('card_set_label failed', exc_info=True)
 
     @runs_in_hwd_thread
     def _import_seed(self, settings, device_id, handler):
         devmgr = self.device_manager()
         client = devmgr.client_by_id(device_id)
         if not client:
-            raise Exception(_("The device was disconnected."))
+            raise Exception(_('The device was disconnected.'))
 
         seed_type, seed, passphrase = settings
 
-        if seed_type != "bip39":
-            raise UserFacingException(_("Only BIP39 seeds are supported!"))
+        if seed_type != 'bip39':
+            raise UserFacingException(_('Only BIP39 seeds are supported!'))
 
         (is_checksum_valid, is_wordlist_valid) = bip39_is_checksum_valid(seed)
         if not (is_checksum_valid and is_wordlist_valid):
-            raise UserFacingException(_("Wrong BIP39 mnemonic format!"))
+            raise UserFacingException(_('Wrong BIP39 mnemonic format!'))
 
         masterseed_bytes = bip39_to_seed(seed, passphrase=passphrase)
         masterseed_list = list(masterseed_bytes)
@@ -434,9 +424,7 @@ class SatochipPlugin(HW_PluginBase):
 
             authentikey = client.cc.card_bip32_import_seed(masterseed_list)
             if authentikey:
-                _logger.info("Seed imported successfully.")
-
-    # -- signing ------------------------------------------------------------
+                self.logger.info('Seed imported successfully.')
 
     @runs_in_hwd_thread
     def sign_transaction(self, keystore, tx, prev_tx):
@@ -451,7 +439,7 @@ class SatochipPlugin(HW_PluginBase):
             tx_outputs += var_int(len(tx.outputs()))
             for o in tx.outputs():
                 tx_outputs += int.to_bytes(
-                    o.value, length=8, byteorder="little", signed=False
+                    o.value, length=8, byteorder='little', signed=False
                 )
                 script = o.scriptpubkey
                 tx_outputs += var_int(len(script))
@@ -467,11 +455,11 @@ class SatochipPlugin(HW_PluginBase):
                 script_type = desc.to_legacy_electrum_script_type()
 
                 if txin.is_coinbase_input():
-                    raise UserFacingException(_("Coinbase not supported"))
+                    raise UserFacingException(_('Coinbase not supported'))
 
                 if script_type in (
-                    "p2wpkh", "p2wsh", "p2wpkh-p2sh",
-                    "p2wsh-p2sh", "p2tr",
+                    'p2wpkh', 'p2wsh', 'p2wpkh-p2sh',
+                    'p2wsh-p2sh', 'p2tr',
                 ):
                     segwit_tx = True
 
@@ -480,16 +468,16 @@ class SatochipPlugin(HW_PluginBase):
                 )
                 if not input_path:
                     raise UserFacingException(
-                        _("No matching pubkey for sign_transaction")
+                        _('No matching pubkey for sign_transaction')
                     )
                 input_path = convert_bip32_intpath_to_strpath(input_path)
 
-                is_taproot = script_type == "p2tr"
+                is_taproot = script_type == 'p2tr'
                 if is_taproot and not client.supports_taproot():
                     raise UserFacingException(
                         _(
-                            "Your Satochip does not support Taproot. "
-                            "Taproot requires firmware v0.14 or newer."
+                            'Your Satochip does not support Taproot. '
+                            'Taproot requires firmware v0.14 or newer.'
                         )
                     )
 
@@ -505,7 +493,7 @@ class SatochipPlugin(HW_PluginBase):
                 )
                 tx_hash = bytearray(tx_hash_list)
                 if pre_hash != tx_hash:
-                    raise RuntimeError("Tx preimage mismatch")
+                    raise RuntimeError('Tx preimage mismatch')
 
                 keynbr = 0xFF
 
@@ -517,17 +505,17 @@ class SatochipPlugin(HW_PluginBase):
                     )
                     if tw1 != 0x90 or tw2 != 0x00:
                         raise UserFacingException(
-                            _("Failed to tweak key for Taproot signing.")
+                            _('Failed to tweak key for Taproot signing.')
                         )
-                    tap_hash = bip340_tagged_hash(b"TapSighash", pre_hash)
+                    tap_hash = bip340_tagged_hash(b'TapSighash', pre_hash)
                     (tx_sig, sw1, sw2) = client.cc.card_sign_schnorr_hash(
                         keynbr, list(tap_hash)
                     )
                     if sw1 != 0x90 or sw2 != 0x00:
                         raise UserFacingException(
                             _(
-                                "Failed to sign this Taproot "
-                                "transaction. Please try again."
+                                'Failed to sign this Taproot '
+                                'transaction. Please try again.'
                             )
                         )
                     tx_sig = bytes(tx_sig)
@@ -544,8 +532,8 @@ class SatochipPlugin(HW_PluginBase):
                     if sw1 != 0x90 or sw2 != 0x00:
                         raise UserFacingException(
                             _(
-                                "Failed to sign the transaction. "
-                                "Please try again."
+                                'Failed to sign the transaction. '
+                                'Please try again.'
                             )
                         )
                     tx_sig = bytes(tx_sig)
@@ -574,8 +562,8 @@ class SatochipPlugin(HW_PluginBase):
         if type(wallet) is not Standard_Wallet:
             keystore.handler.show_error(
                 _(
-                    "This function is only available for "
-                    "standard wallets when using {}."
+                    'This function is only available for '
+                    'standard wallets when using {}.'
                 ).format(self.device)
             )
             return
@@ -588,84 +576,84 @@ class SatochipPlugin(HW_PluginBase):
     @staticmethod
     def _next_seed_method(d):
         return (
-            "satochip_have_seed"
-            if d.get("satochip_seed_method") == "import"
-            else "satochip_generate_seed"
+            'satochip_have_seed'
+            if d.get('satochip_seed_method') == 'import'
+            else 'satochip_generate_seed'
         )
 
     @staticmethod
     def _next_seed_ext(wizard, d):
         return (
-            "satochip_have_ext"
+            'satochip_have_ext'
             if wizard.wants_ext(d)
-            else "satochip_import_seed"
+            else 'satochip_import_seed'
         )
 
     def wizard_entry_for_device(
-        self, device_info: "DeviceInfo", *, new_wallet: bool
+        self, device_info: 'DeviceInfo', *, new_wallet: bool
     ) -> str:
-        label_str = device_info.label or ""
+        label_str = device_info.label or ''
         if label_str.endswith(_BLOCKED_SUFFIX):
-            return "satochip_blocked"
+            return 'satochip_blocked'
 
         device_state = device_info.initialized
         if new_wallet:
             if device_state is None:
-                return "satochip_not_setup"
+                return 'satochip_not_setup'
             elif device_state is False:
-                return "satochip_not_seeded"
+                return 'satochip_not_seeded'
             else:
-                return "satochip_start"
+                return 'satochip_start'
         else:
             if device_state is None:
-                return "satochip_recover_setup"
+                return 'satochip_recover_setup'
             elif device_state is False:
-                return "satochip_recover_seed"
+                return 'satochip_recover_seed'
             else:
-                return "satochip_unlock"
+                return 'satochip_unlock'
 
-    def extend_wizard(self, wizard: "NewWalletWizard"):
+    def extend_wizard(self, wizard: 'NewWalletWizard'):
         views = {
-            "satochip_start": {
-                "next": "satochip_xpub",
+            'satochip_start': {
+                'next': 'satochip_xpub',
             },
-            "satochip_xpub": {
-                "next": lambda d: (
+            'satochip_xpub': {
+                'next': lambda d: (
                     wizard.wallet_password_view(d)
                     if wizard.last_cosigner(d)
-                    else "multisig_cosigner_keystore"
+                    else 'multisig_cosigner_keystore'
                 ),
-                "accept": wizard.maybe_master_pubkey,
-                "last": lambda d: (
+                'accept': wizard.maybe_master_pubkey,
+                'last': lambda d: (
                     wizard.is_single_password() and wizard.last_cosigner(d)
                 ),
             },
-            "satochip_not_setup": {
-                "next": "satochip_do_setup",
+            'satochip_not_setup': {
+                'next': 'satochip_do_setup',
             },
-            "satochip_do_setup": {
-                "next": "satochip_not_seeded",
+            'satochip_do_setup': {
+                'next': 'satochip_not_seeded',
             },
-            "satochip_not_seeded": {
-                "next": self._next_seed_method,
+            'satochip_not_seeded': {
+                'next': self._next_seed_method,
             },
-            "satochip_generate_seed": {
-                "next": lambda d: self._next_seed_ext(wizard, d),
+            'satochip_generate_seed': {
+                'next': lambda d: self._next_seed_ext(wizard, d),
             },
-            "satochip_import_seed": {
-                "next": "satochip_success_seed",
+            'satochip_import_seed': {
+                'next': 'satochip_success_seed',
             },
-            "satochip_success_seed": {
-                "next": "satochip_start",
+            'satochip_success_seed': {
+                'next': 'satochip_start',
             },
-            "satochip_unlock": {
-                "last": True,
+            'satochip_unlock': {
+                'last': True,
             },
-            "satochip_recover_setup": {
-                "next": "satochip_recover_seed",
+            'satochip_recover_setup': {
+                'next': 'satochip_recover_seed',
             },
-            "satochip_recover_seed": {
-                "last": True,
+            'satochip_recover_seed': {
+                'last': True,
             },
         }
         wizard.navmap_merge(views)

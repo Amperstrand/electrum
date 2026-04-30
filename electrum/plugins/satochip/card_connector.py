@@ -35,6 +35,7 @@ from .exceptions import (
 )
 from electrum.crypto import sha256d
 
+import threading
 import hashlib
 from electrum.logging import get_logger
 try:
@@ -65,6 +66,11 @@ _MSG_PIN_BLOCKED = _(
     "which erases all data from the card."
 )
 _MSG_WRONG_PIN = _("Wrong PIN! {} tries remaining!")
+
+_WINDOWS_HELLO_ATR = [
+    59, 141, 1, 128, 251, 160, 0, 0,
+    3, 151, 66, 84, 70, 89, 4, 1, 207,
+]
 
 
 def _hex(data):
@@ -122,28 +128,11 @@ class RemovalObserver(CardObserver):
     def update(self, observable, actions):
         (addedcards, removedcards) = actions
         for card in addedcards:
-            if card.atr == [
-                59,
-                141,
-                1,
-                128,
-                251,
-                160,
-                0,
-                0,
-                3,
-                151,
-                66,
-                84,
-                70,
-                89,
-                4,
-                1,
-                207,
-            ]:
+            if card.atr == _WINDOWS_HELLO_ATR:
                 continue  # Ignore Windows Hello for Business virtual device
             logger.info(f"+Inserted: {_hex(card.atr)}")
-            self.cc.card_present = True
+            with self.cc._lock:
+                self.cc.card_present = True
             self.cc.cardservice = card
             self.cc.cardservice.connection = card.createConnection()
             self.cc.cardservice.connection.connect()
@@ -229,7 +218,8 @@ class CardConnector:
         self.pin = None
         self.card_filter = card_filter
         self.reader_index = reader_index
-        self._protocol = None  # set during card connection
+        self._protocol = None
+        self._lock = threading.Lock()
         self.card_type = "card"
         # cache protocol version (version x.y => 256*x+y)
         self.protocol_version = 0
@@ -257,9 +247,11 @@ class CardConnector:
                     timeout=0, cardType=self.cardtype
                 )
             self.cardservice = self.cardrequest.waitforcard()
-            self.card_present = True
+            with self._lock:
+                self.card_present = True
         except CardRequestTimeoutException:
-            self.card_present = False
+            with self._lock:
+                self.card_present = False
         try:
             self.cardmonitor = CardMonitor()
             self.cardobserver = RemovalObserver(self)
@@ -309,7 +301,9 @@ class CardConnector:
         retries = 0
         max_retries = 5
 
-        while self.card_present and retries < max_retries:
+        with self._lock:
+            present = self.card_present
+        while present and retries < max_retries:
             # encrypt apdu
             ins = plain_apdu[1]
             if self.needs_secure_channel and ins not in [
@@ -353,7 +347,8 @@ class CardConnector:
             else:
                 return response, sw1, sw2
 
-        # no card present
+            with self._lock:
+                present = self.card_present
         raise CardNotPresentError(_("No card found! Please insert card!"))
 
     def card_get_ATR(self):
@@ -1009,7 +1004,7 @@ class CardConnector:
 
         if len(txhash) != 32:
             raise ValueError(
-                "Wrong txhash length: " + str(len(txhash)) + "(should be 32)"
+                "Wrong txhash length: " + str(len(txhash)) + " (should be 32)"
             )
         # 2FA support removed: chalresponse always None
         data = list(txhash)
@@ -1030,7 +1025,7 @@ class CardConnector:
 
         if len(txhash) != 32:
             raise ValueError(
-                "Wrong txhash length: " + str(len(txhash)) + "(should be 32)"
+                "Wrong txhash length: " + str(len(txhash)) + " (should be 32)"
             )
         data = list(txhash)
 
@@ -1399,9 +1394,9 @@ class CardConnector:
         ciphertext = bytes(response[18:])
         if len(ciphertext) != size:
             logger.warning(
-                f"In card_decrypt_secure_channel: "
-                f"ciphertext has wrong length: "
-                f"expected {str(size)} got {str(len(ciphertext))}"
+                "In card_decrypt_secure_channel: "
+                "ciphertext has wrong length: "
+                f"expected {size} got {len(ciphertext)}"
             )
             raise SecureChannelError("Ciphertext has wrong length!")
 

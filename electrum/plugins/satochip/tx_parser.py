@@ -167,11 +167,22 @@ class TxParser:
         return self.txChunk
 
     def parse_byte(self, length):
+        if self.txOffset + length > len(self.txData):
+            raise ValueError(
+                f"tx_parser: read past end at offset {self.txOffset}"
+                f"+{length} > {len(self.txData)}"
+            )
         self.txChunk += self.txData[self.txOffset:(self.txOffset + length)]
         self.txOffset += length
         self.txRemaining -= length
 
     def parse_var_int(self):
+
+        if self.txOffset >= len(self.txData):
+            raise ValueError(
+                f"tx_parser: var_int read past end at offset "
+                f"{self.txOffset}"
+            )
 
         first = 0xFF & self.txData[self.txOffset]
         val = 0
@@ -201,25 +212,24 @@ class TxParser:
         return val
 
 
-def read_uint32(bytes, offset):
+def read_uint32(data, offset):
     out = 0
     for i in range(4):
-        out |= (bytes[offset] & 0xFF) << (8 * i)
+        out |= (data[offset] & 0xFF) << (8 * i)
         offset += 1
     return out
 
 
-def read_int32(bytes, offset):
-    # Note: signed 32-bit integer using two's complement
-    n = read_uint32(bytes, offset)
+def read_int32(data, offset):
+    n = read_uint32(data, offset)
     if n >= 0x80000000:
         n -= 0x100000000
     return n
 
 
-def read_int64(bytes, offset):
+def read_int64(data, offset):
     out = 0
     for i in range(8):
-        out |= (bytes[offset] & 0xFF) << (8 * i)
+        out |= (data[offset] & 0xFF) << (8 * i)
         offset += 1
     return out

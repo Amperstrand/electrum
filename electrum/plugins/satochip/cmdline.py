@@ -1,4 +1,4 @@
-"""Satochip command-line handler for headless operation."""
+'''Satochip command-line handler for headless operation.'''
 
 from electrum.plugin import hook
 from electrum.i18n import _
@@ -18,11 +18,11 @@ class SatochipCmdLineHandler(CmdLineHandler):
 
         print_stderr(msg)
         if self.passphrase_on_device and self.yes_no_question(
-            _("Enter passphrase on device?")
+            _('Enter passphrase on device?')
         ):
             return None
         else:
-            return getpass.getpass("")
+            return getpass.getpass('')
 
     def get_pin(self, msg, confirm=False):
         return input(msg).strip()

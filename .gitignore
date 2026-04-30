@@ -28,6 +28,26 @@ electrum_data
 .coverage
 .pytest_cache
 
+# satochip dev artifacts
+allure-results/
+hardware-allure-results/
+*-test-report.*
+pytestdebug.log
+.sisyphus/
+pysatochip/
+Satochip-Utils/
+SatochipApplet/
+docs/
+scripts/
+power-proofofconcept.sh
+
+# satochip visual test artifacts
+electrum/plugins/satochip/tests/screenshots/visual-lifecycle-*/
+electrum/plugins/satochip/tests/screenshots/*.html
+
+# upstream files (exist in spesmilo/electrum, not part of satochip PR)
+electrum/hw_wallet/
+
 # build workspaces
 contrib/build-wine/tmp/
 contrib/build-wine/build/

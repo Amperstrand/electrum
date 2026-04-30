@@ -263,12 +263,12 @@ class CardDataParser:
                 )
             logger.info(
                 "In parse_initiate_secure_channel:"
-                " successfuly recovered authentikey:"
+                " successfully recovered authentikey:"
                 + authentikey.get_public_key_bytes(compressed=False).hex()
             )
 
         logger.info(
-            "In parse_initiate_secure_channel: successfuly recovered pubkey:"
+            "In parse_initiate_secure_channel: successfully recovered pubkey:"
             + self.pubkey.get_public_key_bytes(compressed=False).hex()
         )
         return self.pubkey
