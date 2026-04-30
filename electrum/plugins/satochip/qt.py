@@ -350,7 +350,6 @@ MSG_SEED_IMPORT = [
     ),
 ]
 
-
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
@@ -1257,7 +1256,6 @@ class WCSatochipWrongCard(WalletWizardComponent):
         WalletWizardComponent.__init__(
             self, parent, wizard, title=_('Card Mismatch')
         )
-        self._busy = False
 
     def on_ready(self):
         _name, _info = self.wizard_data['hardware_device']
@@ -1312,7 +1310,6 @@ class WCSatochipRecoverSetup(WalletWizardComponent, Logger):
             title=_('Set Up Satochip for Existing Wallet'),
         )
         Logger.__init__(self)
-        self._busy = False
         self.plugins = wizard.plugins
         self.plugin = self.plugins.get_plugin('satochip')
         self.validChanged.connect(self._on_valid_changed)
@@ -1408,7 +1405,6 @@ class WCSatochipRecoverSeed(WalletWizardComponent, Logger):
             self, parent, wizard, title=_('Import Seed for Existing Wallet')
         )
         Logger.__init__(self)
-        self._busy = False
         self._seed_widget = None
         self.plugins = wizard.plugins
         self.plugin = self.plugins.get_plugin('satochip')
@@ -1634,8 +1630,6 @@ class WCSatochipSetupParams(WalletWizardComponent):
             WWLabel(_('Satochip card setup in progress\u2026'))
         )
 
-        self._busy = True
-
     def on_ready(self):
         current_cosigner = self.wizard.current_cosigner(self.wizard_data)
         _name, _info = current_cosigner['hardware_device']
@@ -1672,8 +1666,6 @@ class WCSatochipSetup(WalletWizardComponent, Logger):
         self.validChanged.connect(self._on_valid_changed)
 
         self.layout().addWidget(WWLabel(_('Setting up card\u2026')))
-
-        self._busy = True
 
     def on_ready(self):
         current_cosigner = self.wizard.current_cosigner(self.wizard_data)
@@ -1773,8 +1765,6 @@ class WCSatochipGenerateSeed(WalletWizardComponent):
         length_layout.addStretch(1)
         self.layout().addLayout(length_layout)
 
-        self._busy = True
-
     def on_ready(self):
         QTimer.singleShot(1, self._create_seed)
 
@@ -1863,8 +1853,6 @@ class WCSatochipImportSeed(WalletWizardComponent, Logger):
         self.validChanged.connect(self._on_valid_changed)
 
         self.layout().addWidget(WWLabel(_('Importing seed\u2026')))
-
-        self._busy = True
 
     def on_ready(self):
         current_cosigner = self.wizard.current_cosigner(self.wizard_data)

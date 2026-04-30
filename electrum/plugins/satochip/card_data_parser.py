@@ -25,7 +25,6 @@ from hashlib import sha256
 from electrum.i18n import _
 
 from electrum_ecc import (
-    ECPrivkey,
     ECPubkey,
     InvalidECPointException,
 )
@@ -134,93 +133,6 @@ class CardDataParser:
             )
 
         return (self.pubkey, self.chaincode)
-
-    def parse_bip32_get_extended_privkey(self, response):
-        logger.debug("In parse_bip32_get_extended_privkey")
-        if self.authentikey is None:
-            raise ValueError("Authentikey not set!")
-
-        # double signature: first is self-signed, second by authentikey
-        logger.debug(
-            "[CardDataParser] parse_bip32_get_extended_privkey:"
-            " first signature recovery"
-        )
-        self.chaincode = bytearray(response[0:32])
-        data_size = ((response[32] & 0x7F) << 8) + (response[33] & 0xFF)
-        data = response[34:(32 + 2 + data_size)]
-        msg_size = 32 + 2 + data_size
-        sig_size = (
-            (response[msg_size] & 0xFF) << 8
-        ) + (response[msg_size + 1] & 0xFF)
-        if sig_size == 0:
-            raise ValueError("Signature missing")
-        privkey_list = data
-        self.privkey = ECPrivkey(bytes(privkey_list))
-
-        # second signature by authentikey
-        logger.debug(
-            "[CardDataParser] parse_bip32_get_extended_privkey:"
-            " second signature recovery"
-        )
-        msg2_size = msg_size + 2 + sig_size
-        msg2 = response[0:msg2_size]
-        sig2_size = (
-            (response[msg2_size] & 0xFF) << 8
-        ) + (response[msg2_size + 1] & 0xFF)
-        signature2 = response[(msg2_size + 2):(msg2_size + 2 + sig2_size)]
-        authentikey = self.get_pubkey_from_signature(
-            self.authentikey_coordx, msg2, signature2
-        )
-        if authentikey != self.authentikey:
-            raise ValueError(
-                _SEED_MISMATCH_MSG + _msg_warning()
-            )
-
-        return (self.privkey, self.chaincode)
-
-    def parse_bip32_get_extendedkey_bip85(self, response):
-        logger.debug("In parse_bip32_get_extendedkey_bip85")
-        if self.authentikey is None:
-            raise ValueError("Authentikey not set!")
-
-        logger.debug(
-            f"[CardDataParser] parse_bip32_get_extendedkey_bip85:"
-            f" response_hex: {bytes(response).hex()}"
-        )
-
-        # double signature: first is self-signed, second by authentikey
-        logger.debug(
-            "[CardDataParser] parse_bip32_get_extendedkey_bip85:"
-            " first signature recovery"
-        )
-        entropy_size = ((response[0] & 0xFF) << 8) + (response[1] & 0xFF)
-        entropy_bytes = bytes(response[2:2 + entropy_size])
-        msg_size = 2 + entropy_size
-        sig_size = (
-            (response[msg_size] & 0xFF) << 8
-        ) + (response[msg_size + 1] & 0xFF)
-        if sig_size == 0:
-            raise ValueError("Signature missing")
-
-        logger.debug(
-            "[CardDataParser] parse_bip32_get_extendedkey_bip85:"
-            " second signature recovery"
-        )
-        msg2_size = msg_size + 2 + sig_size
-        msg2 = response[0:msg2_size]
-        sig2_size = (
-            (response[msg2_size] & 0xFF) << 8
-        ) + (response[msg2_size + 1] & 0xFF)
-        signature2 = response[(msg2_size + 2):(msg2_size + 2 + sig2_size)]
-        authentikey = self.get_pubkey_from_signature(
-            self.authentikey_coordx, msg2, signature2
-        )
-        if authentikey != self.authentikey:
-            raise ValueError(
-                _SEED_MISMATCH_MSG + _msg_warning()
-            )
-
-        return entropy_bytes
 
     def parse_initiate_secure_channel(self, response):
         logger.debug("In parse_initiate_secure_channel")

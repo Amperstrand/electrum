@@ -323,19 +323,14 @@ class SatochipPlugin(HW_PluginBase):
             raise Exception(_('The device was disconnected.'))
         client.handler = self.create_handler(wizard)
 
-        try:
-            time.sleep(0.3)
-            if not client._ensure_card_connection():
-                raise UserFacingException(
-                    _('Cannot communicate with the card.')
-                )
-            (_r1, _r2, _r3, status) = client.cc.card_get_status()
-            if status.get('setup_done'):
-                return
-        except UserFacingException:
-            raise
-        except Exception:
-            pass
+        time.sleep(0.3)
+        if not client._ensure_card_connection():
+            raise UserFacingException(
+                _('Cannot communicate with the card.')
+            )
+        (_r1, _r2, _r3, status) = client.cc.card_get_status()
+        if status.get('setup_done'):
+            return
 
     def _generate_puk(self):
         from os import urandom

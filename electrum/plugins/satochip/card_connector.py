@@ -206,7 +206,6 @@ class CardConnector:
             self.client.cc = self
         self.cardtype = AnyCardType()
         self.is_seeded = None
-        self.needsPIN = None
         self.setup_done = None
         self.needs_secure_channel = None
         self.mode_factory_reset = False
@@ -605,7 +604,9 @@ class CardConnector:
         elif isinstance(ublk1, bytes):
             ublk1 = list(ublk1)
 
-        pin = [0x4D, 0x75, 0x73, 0x63, 0x6C, 0x65, 0x30, 0x30]  # default pin
+        # Applet default transport PIN — required to authenticate card_setup()
+        _APPLET_DEFAULT_PIN = list(b'Muscle00')
+        pin = _APPLET_DEFAULT_PIN
         cla = JCconstants.CardEdge_CLA
         ins = JCconstants.INS_SETUP
         p1 = 0
@@ -845,14 +846,7 @@ class CardConnector:
                     _MSG_UNEXPECTED_ERROR, sw1, sw2
                 )
             if sw1 == 0x90 and sw2 == 0x00:
-                if (option_flags & 0x04) == 0x04:  # BIP85
-                    entropy_bytes = (
-                        self.parser.parse_bip32_get_extendedkey_bip85(
-                            response
-                        )
-                    )
-                    return entropy_bytes
-                elif (option_flags & 0x02) == 0x00:  # BIP32 pubkey
+                if (option_flags & 0x02) == 0x00:  # BIP32 pubkey
                     if (response[32] & 0x80) == 0x80:
                         logger.info(
                             "[card_bip32_get_extendedkey] "
@@ -1107,46 +1101,6 @@ class CardConnector:
         p1 = policy_byte
         p2 = 0x00
         apdu = [cla, ins, p1, p2, 0]
-        response, sw1, sw2 = self.card_transmit(apdu)
-        return response, sw1, sw2
-
-    def card_get_ndef(self):
-        """Read the NFC NDEF tag from the card.
-
-        Returns (response, sw1, sw2, ndef_bytes).
-        ndef_bytes is empty if the card does not support NDEF.
-        """
-        logger.debug("In card_get_ndef")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_NDEF
-        p1 = 0x00
-        p2 = 0x01  # GET
-        apdu = [cla, ins, p1, p2]
-        response, sw1, sw2 = self.card_transmit(apdu)
-
-        if sw1 == 0x90 and sw2 == 0x00:
-            ndef_bytes = bytes(response[1:]) if len(response) > 0 else b""
-        elif sw1 == 0x6D and sw2 == 0x00:
-            ndef_bytes = b""
-        else:
-            logger.warning(f"Error reading NDEF: {hex(256 * sw1 + sw2)}")
-            ndef_bytes = b""
-
-        return response, sw1, sw2, ndef_bytes
-
-    def card_set_ndef(self, ndef_bytes):
-        """Write an NFC NDEF tag to the card.
-
-        ndef_bytes: raw NDEF message bytes.
-        """
-        logger.debug("In card_set_ndef")
-        cla = JCconstants.CardEdge_CLA
-        ins = JCconstants.INS_NDEF
-        p1 = 0x00
-        p2 = 0x00  # SET
-        data = [len(ndef_bytes)] + list(ndef_bytes)
-        lc = len(data)
-        apdu = [cla, ins, p1, p2, lc] + data
         response, sw1, sw2 = self.card_transmit(apdu)
         return response, sw1, sw2
 
